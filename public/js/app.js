@@ -829,9 +829,9 @@ async function renderSubmitPurchase() {
       <form id="purchase-form" onsubmit="handlePurchaseSubmit(event)">
         ${isAuditorOrAdmin ? `
           <div class="card">
-            <div class="card-title" style="margin-bottom:12px;">👷 Select Mechanic</div>
+            <div class="card-title" style="margin-bottom:12px;">👷 Select Mechanic <span style="color:var(--danger)">*</span></div>
             <div class="form-group">
-              <label>Mechanic Account</label>
+              <label>Mechanic Account <span style="color:var(--danger)">*</span></label>
               <select id="pur-mechanic-id" required>
                 <option value="">-- Choose Mechanic --</option>
                 ${mechanics.filter(m => m.is_active).map(m => `
@@ -843,32 +843,35 @@ async function renderSubmitPurchase() {
         ` : ''}
 
         <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">👤 Customer & Date</div>
+          <div class="card-title" style="margin-bottom:12px;">👤 Customer & Date <span style="color:var(--danger)">*</span></div>
           <div class="form-row">
             <div class="form-group">
-              <label>Purchase Date</label>
+              <label>Purchase Date <span style="color:var(--danger)">*</span></label>
               <input type="date" id="pur-date" value="${new Date().toISOString().slice(0, 10)}" required>
             </div>
             <div class="form-group">
-              <label>Customer Name</label>
+              <label>Customer Name <span style="color:var(--danger)">*</span></label>
               <input type="text" id="pur-cust-name" placeholder="Full name of customer" required>
             </div>
           </div>
 
           <div class="form-row">
             <div class="form-group">
-              <label>Customer Phone Number</label>
-              <input type="tel" id="pur-cust-phone" placeholder="10-digit mobile number" required pattern="[0-9]{10}">
+              <label>Customer Phone Number (Optional)</label>
+              <input type="tel" id="pur-cust-phone" placeholder="10-digit mobile number (Optional)">
             </div>
             <div class="form-group">
-              <label>Customer Address</label>
-              <input type="text" id="pur-cust-addr" placeholder="Location, Street, City" required>
+              <label>Customer Address / Area (Optional)</label>
+              <input type="text" id="pur-cust-addr" placeholder="Location, Street, City (Optional)">
             </div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">📦 Products Purchased</div>
+          <div class="card-header" style="margin-bottom:8px;">
+            <div class="card-title">📦 Products Purchased <span style="font-size:12px;color:var(--text-muted);font-weight:normal;">(Optional)</span></div>
+          </div>
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Optional: You can add product line items or skip this section.</p>
           <div id="items-container">
             <!-- Dynamic item rows -->
           </div>
@@ -876,28 +879,29 @@ async function renderSubmitPurchase() {
         </div>
 
         <div class="card">
-          <div class="card-title" style="margin-bottom:12px;">💰 Amount & Bill Photo</div>
+          <div class="card-header" style="margin-bottom:8px;">
+            <div class="card-title">💰 Amount & Bill Photo <span style="font-size:12px;color:var(--text-muted);font-weight:normal;">(Optional)</span></div>
+          </div>
           <div class="form-group">
-            <label>Total Bill Amount Paid (₹)</label>
-            <input type="number" id="pur-amount" placeholder="e.g. 4500" min="1" step="any" required>
+            <label>Total Bill Amount (₹) (Optional)</label>
+            <input type="number" id="pur-amount" placeholder="e.g. 4500 (Optional)" min="0" step="any">
           </div>
 
           <div class="form-group">
-            <label>Bill Photo / Receipt (Camera Capture or File)</label>
+            <label>Bill Photo / Receipt (Optional)</label>
             <input type="file" id="pur-file" accept="image/*,.pdf" capture="environment" onchange="handleBillFileSelected(this)">
-            <small style="color:var(--text-muted)">Take a clear, well-lit photo of the full bill.</small>
+            <small style="color:var(--text-muted)">Take a photo of the bill if available (Optional).</small>
             <div id="file-preview-slot" style="margin-top:10px;"></div>
           </div>
         </div>
 
-        <button type="submit" class="btn btn-primary btn-lg" id="pur-submit-btn">Submit Purchase for Audit Verification</button>
+        <button type="submit" class="btn btn-primary btn-lg" id="pur-submit-btn">Submit Purchase & Generate Bill</button>
       </form>
     </div>
   `;
 
   // Store products for dynamic rows
   window._availableProducts = products;
-  addPurchaseItemRow();
 }
 
 let uploadedBillUrl = '';
@@ -913,15 +917,15 @@ function addPurchaseItemRow() {
   div.style.marginBottom = '8px';
   div.innerHTML = `
     <div style="flex:2;">
-      <select class="item-prod-select" onchange="handleProductSelected(this, '${rowId}')" required>
-        <option value="">Select product...</option>
+      <select class="item-prod-select" onchange="handleProductSelected(this, '${rowId}')">
+        <option value="">-- Choose Product (Optional) --</option>
         ${(window._availableProducts || []).map(p => `
           <option value="${p.id}" data-unit="${p.unit}" data-name="${p.name}">${p.name} (${p.category})</option>
         `).join('')}
       </select>
     </div>
     <div style="flex:1;">
-      <input type="number" class="item-qty" placeholder="Quantity" min="0.1" step="any" required>
+      <input type="number" class="item-qty" placeholder="Quantity" min="0" step="any">
     </div>
     <div style="flex:0.8;">
       <input type="text" class="item-unit" placeholder="Unit" readonly style="background:#F1F5F9;">
@@ -976,35 +980,42 @@ async function handlePurchaseSubmit(e) {
   const btn = document.getElementById('pur-submit-btn');
 
   const mechSelect = document.getElementById('pur-mechanic-id');
-  const mechanicId = mechSelect ? mechSelect.value : null;
+  const mechanicId = mechSelect ? mechSelect.value : (AppState.user ? AppState.user.mechanicId : null);
+
+  if ((AppState.user.role === 'admin' || AppState.user.role === 'auditor') && !mechanicId) {
+    return showToast('Please select a mechanic', 'error');
+  }
 
   const purchaseDate = document.getElementById('pur-date').value;
   const customerName = document.getElementById('pur-cust-name').value.trim();
   const customerPhone = document.getElementById('pur-cust-phone').value.trim();
   const customerAddress = document.getElementById('pur-cust-addr').value.trim();
-  const totalAmount = parseFloat(document.getElementById('pur-amount').value);
+  const totalAmount = parseFloat(document.getElementById('pur-amount').value) || 0;
 
-  // Collect item rows
+  if (!purchaseDate) {
+    return showToast('Purchase Date is required', 'error');
+  }
+  if (!customerName) {
+    return showToast('Customer Name is required', 'error');
+  }
+
+  // Collect item rows (optional)
   const itemRows = document.querySelectorAll('#items-container .form-row');
   const items = [];
   itemRows.forEach(row => {
     const sel = row.querySelector('.item-prod-select');
-    const qty = parseFloat(row.querySelector('.item-qty').value);
-    const unit = row.querySelector('.item-unit').value;
-    if (sel && sel.value && qty > 0) {
+    const qty = parseFloat(row.querySelector('.item-qty').value) || 1;
+    const unit = row.querySelector('.item-unit').value || 'Unit';
+    if (sel && sel.value) {
       const opt = sel.options[sel.selectedIndex];
       items.push({
         productId: parseInt(sel.value, 10),
-        productName: opt.getAttribute('data-name'),
+        productName: opt.getAttribute('data-name') || opt.text,
         quantity: qty,
         unit: unit
       });
     }
   });
-
-  if (items.length === 0) {
-    return showToast('Add at least one product with valid quantity', 'error');
-  }
 
   btn.disabled = true;
   btn.textContent = 'Submitting...';
@@ -1022,7 +1033,7 @@ async function handlePurchaseSubmit(e) {
     };
 
     const res = await API.post('/api/purchases', payload);
-    showToast('Purchase submitted for audit verification!', 'success');
+    showToast('Purchase submitted successfully!', 'success');
     uploadedBillUrl = '';
 
     if (res.notification && (AppState.user.role === 'admin' || AppState.user.role === 'auditor')) {
@@ -1034,7 +1045,7 @@ async function handlePurchaseSubmit(e) {
     }
   } catch (err) {
     btn.disabled = false;
-    btn.textContent = 'Submit Purchase for Audit Verification';
+    btn.textContent = 'Submit Purchase & Generate Bill';
   }
 }
 

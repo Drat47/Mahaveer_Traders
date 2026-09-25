@@ -543,31 +543,29 @@ const server = http.createServer(async (req, res) => {
       } = body;
 
       const targetMechId = user.role === 'mechanic' ? user.mechanicId : parseInt(mechanicId, 10);
-      if (!targetMechId) return sendError('Mechanic ID is required', 400);
-
-      if (!purchaseDate || !customerName || !customerPhone || !customerAddress || !totalAmount) {
-        return sendError('Please complete all customer and purchase details', 400);
+      if (!purchaseDate || !customerName || !customerName.trim()) {
+        return sendError('Purchase Date and Customer Name are required', 400);
       }
 
-      if (!items || !Array.isArray(items) || items.length === 0) {
-        return sendError('At least one product item is required', 400);
-      }
+      const amt = parseFloat(totalAmount) || 0;
+      const cleanPhone = (customerPhone || '').trim();
+      const cleanAddr = (customerAddress || '').trim();
+      const validItems = Array.isArray(items) && items.length > 0 ? items : [{ productId: null, productName: 'General Materials / Store Purchase', quantity: 1, unit: 'Order' }];
 
-      const amt = parseFloat(totalAmount);
-      if (isNaN(amt) || amt <= 0) return sendError('Valid total amount is required', 400);
+      // Duplicate check (only if customer phone and amount are provided)
+      if (cleanPhone && amt > 0) {
+        const duplicate = db.prepare(`
+          SELECT id FROM purchases 
+          WHERE mechanic_id = ? AND purchase_date = ? AND customer_phone = ? AND total_amount = ? AND status != 'REJECTED'
+        `).get(targetMechId, purchaseDate, cleanPhone, amt);
 
-      // Duplicate check (same mechanic, date, phone, amount within last 30 days)
-      const duplicate = db.prepare(`
-        SELECT id FROM purchases 
-        WHERE mechanic_id = ? AND purchase_date = ? AND customer_phone = ? AND total_amount = ? AND status != 'REJECTED'
-      `).get(targetMechId, purchaseDate, customerPhone.trim(), amt);
-
-      if (duplicate && !body.allowDuplicateConfirmation) {
-        return sendJson({
-          potentialDuplicate: true,
-          duplicatePurchaseId: duplicate.id,
-          message: 'A similar purchase was already submitted with this date, customer phone, and amount. Please verify if this is duplicate.'
-        }, 409);
+        if (duplicate && !body.allowDuplicateConfirmation) {
+          return sendJson({
+            potentialDuplicate: true,
+            duplicatePurchaseId: duplicate.id,
+            message: 'A similar purchase was already submitted with this date, customer phone, and amount. Please verify if this is duplicate.'
+          }, 409);
+        }
       }
 
       const insertPur = db.prepare(`
@@ -579,8 +577,8 @@ const server = http.createServer(async (req, res) => {
         targetMechId,
         purchaseDate,
         customerName.trim(),
-        customerPhone.trim(),
-        customerAddress.trim(),
+        cleanPhone,
+        cleanAddr,
         amt,
         billFileUrl || ''
       );
@@ -591,8 +589,8 @@ const server = http.createServer(async (req, res) => {
         VALUES (?, ?, ?, ?, ?, 0, 0)
       `);
 
-      for (const it of items) {
-        insertItem.run(purId, it.productId || null, it.productName, parseFloat(it.quantity) || 1, it.unit || 'Unit');
+      for (const it of validItems) {
+        insertItem.run(purId, it.productId || null, it.productName || 'General Materials', parseFloat(it.quantity) || 1, it.unit || 'Order');
       }
 
       const mech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(targetMechId);
