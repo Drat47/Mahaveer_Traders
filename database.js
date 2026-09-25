@@ -157,6 +157,23 @@ function initDatabase() {
     );
   `);
 
+  // Safe schema migration for product_returns extra columns
+  const migrationCols = [
+    'replacement_summary TEXT',
+    'original_amount REAL',
+    'returned_value REAL',
+    'replacement_value REAL',
+    'updated_net_amount REAL',
+    'points_change INTEGER'
+  ];
+  for (const col of migrationCols) {
+    try {
+      db.exec(`ALTER TABLE product_returns ADD COLUMN ${col};`);
+    } catch (e) {
+      // Column already exists
+    }
+  }
+
   // Insert default settings if not exists
   const checkSettings = db.prepare("SELECT COUNT(*) as count FROM settings").get();
   if (checkSettings.count === 0) {

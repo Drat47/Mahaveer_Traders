@@ -727,6 +727,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // 9. Product Returns & Point Reversals
+    // 9. Product Returns, Replacements & Point Reversals / Adjustments
     const purReturnMatch = pathname.match(/^\/api\/purchases\/(\d+)\/return$/);
     if (purReturnMatch && req.method === 'POST') {
       const user = authenticate(req);
@@ -734,107 +735,187 @@ const server = http.createServer(async (req, res) => {
 
       const id = parseInt(purReturnMatch[1], 10);
       const purchase = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
-      if (!purchase || purchase.status !== 'APPROVED') return sendError('Approved purchase required to process return', 400);
+      if (!purchase || purchase.status !== 'APPROVED') return sendError('Approved purchase required to process return or exchange', 400);
 
       const body = await parseJsonBody(req);
-      const { returnedItems, reason } = body;
+      const {
+        returnedItems,
+        replacementItems,
+        returnedValue,
+        replacementValue,
+        reason
+      } = body;
 
-      if (!reason || !reason.trim()) return sendError('Return reason is mandatory for audit', 400);
-      if (!returnedItems || !Array.isArray(returnedItems) || returnedItems.length === 0) {
-        return sendError('Select items to return', 400);
-      }
+      if (!reason || !reason.trim()) return sendError('Reason for return / exchange is required for audit', 400);
+
+      const retVal = parseFloat(returnedValue) || 0;
+      const repVal = parseFloat(replacementValue) || 0;
 
       const itemsInDb = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
-      let totalPointsToReverse = 0;
-      const processedItemsSummary = [];
+      const processedReturnsSummary = [];
+      let calculatedReturnPoints = 0;
 
-      for (const ret of returnedItems) {
-        const item = itemsInDb.find(i => i.id === ret.itemId);
-        if (!item) continue;
-        const retQty = parseFloat(ret.returnedQuantity) || 0;
-        if (retQty <= 0) continue;
+      if (Array.isArray(returnedItems) && returnedItems.length > 0) {
+        for (const ret of returnedItems) {
+          const item = itemsInDb.find(i => i.id === ret.itemId);
+          if (!item) continue;
+          const retQty = parseFloat(ret.returnedQuantity) || 0;
+          if (retQty <= 0) continue;
 
-        const maxAllowed = item.quantity - item.returned_quantity;
-        if (retQty > maxAllowed) {
-          return sendError(`Return quantity for ${item.product_name} exceeds remaining available quantity (${maxAllowed})`, 400);
+          const maxAllowed = item.quantity - item.returned_quantity;
+          if (retQty > maxAllowed) {
+            return sendError(`Return quantity for ${item.product_name} exceeds remaining available quantity (${maxAllowed})`, 400);
+          }
+
+          const linePoints = Math.round((item.points_allocated || 0) * (retQty / (item.quantity || 1)));
+          calculatedReturnPoints += linePoints;
+
+          db.prepare("UPDATE purchase_items SET returned_quantity = returned_quantity + ? WHERE id = ?").run(retQty, item.id);
+          processedReturnsSummary.push(`${item.product_name} (${retQty} ${item.unit})`);
         }
-
-        // Calculate proportional points based on ORIGINAL allocated points for this line item
-        const itemPointsToReverse = Math.round(item.points_allocated * (retQty / item.quantity));
-        totalPointsToReverse += itemPointsToReverse;
-
-        // Update returned quantity in DB
-        db.prepare("UPDATE purchase_items SET returned_quantity = returned_quantity + ? WHERE id = ?").run(retQty, item.id);
-        processedItemsSummary.push(`${item.product_name} (${retQty} ${item.unit})`);
       }
 
-      if (processedItemsSummary.length === 0) {
-        return sendError('No valid items returned', 400);
+      // Add replacement / new items to purchase_items if provided
+      const processedReplacementsSummary = [];
+      if (Array.isArray(replacementItems) && replacementItems.length > 0) {
+        const insertItem = db.prepare(`
+          INSERT INTO purchase_items (purchase_id, product_id, product_name, quantity, unit, points_allocated, returned_quantity)
+          VALUES (?, ?, ?, ?, ?, ?, 0)
+        `);
+        for (const rep of replacementItems) {
+          if (!rep.productName || !rep.productName.trim()) continue;
+          const repQty = parseFloat(rep.quantity) || 1;
+          const repPrice = parseFloat(rep.price) || 0;
+          const repPts = Math.round(repPrice * 3 / 100);
+          insertItem.run(id, rep.productId || null, rep.productName.trim(), repQty, rep.unit || 'Piece', repPts);
+          processedReplacementsSummary.push(`${rep.productName.trim()} (${repQty} ${rep.unit || 'Piece'})`);
+        }
       }
+
+      if (processedReturnsSummary.length === 0 && processedReplacementsSummary.length === 0 && retVal <= 0 && repVal <= 0) {
+        return sendError('Please specify items to return or replacement items added', 400);
+      }
+
+      const origAmount = purchase.total_amount;
+      const updatedNetAmount = Math.max(0, origAmount - retVal + repVal);
+
+      // Points calculation
+      let pointsChange = 0;
+      if (retVal > 0 || repVal > 0) {
+        const netValueChange = repVal - retVal;
+        pointsChange = Math.round(netValueChange * 3 / 100);
+      } else {
+        pointsChange = -calculatedReturnPoints;
+      }
+
+      // Update purchase record net total amount
+      db.prepare("UPDATE purchases SET total_amount = ? WHERE id = ?").run(updatedNetAmount, id);
 
       const mech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(purchase.mechanic_id);
       const prevBal = mech.available_points;
-      const immediateDeduction = Math.min(prevBal, totalPointsToReverse);
-      const pendingRecovery = totalPointsToReverse - immediateDeduction;
+      let immediateChange = 0;
+      let pendingRecovery = 0;
 
-      // Update mechanic points
+      if (pointsChange < 0) {
+        const ptsToDeduct = Math.abs(pointsChange);
+        const actualDeduct = Math.min(prevBal, ptsToDeduct);
+        pendingRecovery = ptsToDeduct - actualDeduct;
+        immediateChange = -actualDeduct;
+
+        db.prepare(`
+          UPDATE mechanics 
+          SET available_points = available_points - ?, recovery_points = recovery_points + ?
+          WHERE id = ?
+        `).run(actualDeduct, pendingRecovery, mech.id);
+
+        db.prepare(`
+          INSERT INTO point_transactions (mechanic_id, type, reference_id, points, description, balance_after, created_by, reason)
+          VALUES (?, 'PRODUCT_RETURN', ?, ?, ?, ?, ?, ?)
+        `).run(
+          mech.id,
+          purchase.id,
+          -actualDeduct,
+          `Return/Adjustment for Bill #${purchase.id}${pendingRecovery > 0 ? ` (${pendingRecovery} under recovery)` : ''}`,
+          prevBal - actualDeduct,
+          user.name,
+          reason.trim()
+        );
+      } else if (pointsChange > 0) {
+        creditPoints(mech.id, pointsChange, 'MANUAL_ADJUSTMENT', purchase.id, `Points increment for Bill #${purchase.id} exchange/upgrade`, user.name);
+        immediateChange = pointsChange;
+      }
+
+      const updatedMech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(mech.id);
+      const newBal = updatedMech.available_points;
+
+      // Insert product return record with full audit metadata
+      const retSummaryText = processedReturnsSummary.join(', ') || (retVal > 0 ? `Returned items valued ₹${retVal}` : 'None');
+      const repSummaryText = processedReplacementsSummary.join(', ') || (repVal > 0 ? `Replacement items valued ₹${repVal}` : 'None');
+
+      const auditFlag = pendingRecovery > 0 ? 1 : 0;
+
       db.prepare(`
-        UPDATE mechanics 
-        SET available_points = available_points - ?, recovery_points = recovery_points + ?
-        WHERE id = ?
-      `).run(immediateDeduction, pendingRecovery, mech.id);
-
-      const newBal = prevBal - immediateDeduction;
-
-      // Record point transaction
-      db.prepare(`
-        INSERT INTO point_transactions (mechanic_id, type, reference_id, points, description, balance_after, created_by, reason)
-        VALUES (?, 'PRODUCT_RETURN', ?, ?, ?, ?, ?, ?)
+        INSERT INTO product_returns (
+          mechanic_id, purchase_id, items_summary, points_reversed, points_under_recovery,
+          prev_balance, new_balance, reason, status, processed_by, audit_flag,
+          replacement_summary, original_amount, returned_value, replacement_value, updated_net_amount, points_change
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         mech.id,
         purchase.id,
-        -immediateDeduction,
-        `Points reversed for returned items on Bill #${purchase.id}${pendingRecovery > 0 ? ` (${pendingRecovery} under recovery)` : ''}`,
-        newBal,
-        user.name,
-        reason
-      );
-
-      // Check if there is an active pending redemption conflict
-      const hasPendingRedemption = db.prepare("SELECT COUNT(*) as count FROM redemptions WHERE mechanic_id = ? AND status = 'Pending'").get(mech.id).count > 0;
-      const auditFlag = pendingRecovery > 0 && hasPendingRedemption ? 1 : 0;
-
-      // Insert product return record
-      db.prepare(`
-        INSERT INTO product_returns (mechanic_id, purchase_id, items_summary, points_reversed, points_under_recovery, prev_balance, new_balance, reason, status, processed_by, audit_flag)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        mech.id,
-        purchase.id,
-        processedItemsSummary.join(', '),
-        totalPointsToReverse,
+        retSummaryText,
+        pointsChange < 0 ? Math.abs(pointsChange) : 0,
         pendingRecovery,
         prevBal,
         newBal,
         reason.trim(),
         pendingRecovery > 0 ? 'Partially Recovered' : 'Completed',
         user.name,
-        auditFlag
+        auditFlag,
+        repSummaryText,
+        origAmount,
+        retVal,
+        repVal,
+        updatedNetAmount,
+        pointsChange
       );
 
-      addNotification(mech.id, `${immediateDeduction} points reversed due to returned items from Bill #${purchase.id}. Reason: ${reason}.` + (pendingRecovery > 0 ? ` Note: ${pendingRecovery} points pending recovery will be deducted from your next purchases.` : ''));
-      if (auditFlag) {
-        addNotification(0, `AUDIT WARNING: Reversal exceeds balance for ${mech.name} who has a pending redemption.`);
-      }
+      // Build WhatsApp and SMS notification text for the worker
+      const cleanPhone = (mech.phone || '').replace(/[^0-9]/g, '');
+      const waText = `🏪 *MAHAVEER TRADERS - BILL ADJUSTMENT / RETURN ALERT* 🏪\n\n` +
+        `Hello *${mech.name}*,\n` +
+        `A return / exchange adjustment was processed for customer *${purchase.customer_name}* (Bill #${purchase.id}).\n\n` +
+        `📄 *Bill ID:* #${purchase.id}\n` +
+        `💰 *Original Bill Amount:* ₹${origAmount.toLocaleString('en-IN')}\n` +
+        (retVal > 0 ? `↩️ *Items Returned:* ${retSummaryText} — Value: ₹${retVal.toLocaleString('en-IN')}\n` : '') +
+        (repVal > 0 ? `🔄 *Replacement Added:* ${repSummaryText} — Value: ₹${repVal.toLocaleString('en-IN')}\n` : '') +
+        `💵 *Updated Net Bill Amount:* ₹${updatedNetAmount.toLocaleString('en-IN')}\n` +
+        `📝 *Reason:* ${reason.trim()}\n\n` +
+        `⚖️ *Points Adjustment:* ${pointsChange > 0 ? `+${pointsChange}` : pointsChange} Points\n` +
+        `⭐ *Your New Available Balance:* ${newBal} Points\n` +
+        (pendingRecovery > 0 ? `⚠️ *Recovery Pending:* ${pendingRecovery} pts will be adjusted from future bills.\n` : '') +
+        `\nThank you for partnering with Mahaveer Traders!`;
 
-      logAudit(user.name, user.role, 'Process Product Return', `Reversed ${totalPointsToReverse} pts on Bill #${purchase.id} for ${mech.name}. Items: ${processedItemsSummary.join(', ')}. Reason: ${reason}`, req);
+      const notification = {
+        workerName: mech.name,
+        workerPhone: cleanPhone,
+        whatsappUrl: `https://wa.me/91${cleanPhone}?text=${encodeURIComponent(waText)}`,
+        smsUrl: `sms:+91${cleanPhone}?body=${encodeURIComponent(waText)}`,
+        messageText: waText
+      };
+
+      addNotification(mech.id, `Bill #${purchase.id} adjusted. Reason: ${reason}. Points changed by ${pointsChange > 0 ? '+' : ''}${pointsChange}. Available Balance: ${newBal} pts.`);
+      logAudit(user.name, user.role, 'Process Return / Exchange', `Adjusted Bill #${purchase.id} for ${mech.name}. Ret: ₹${retVal}, Rep: ₹${repVal}, Net: ₹${updatedNetAmount}, Pts: ${pointsChange}`, req);
 
       return sendJson({
         success: true,
-        pointsReversed: totalPointsToReverse,
-        immediateDeduction,
+        pointsChange,
+        updatedNetAmount,
+        immediateChange,
         pendingRecovery,
-        newBalance: newBal
+        newBalance: newBal,
+        notification
       });
     }
 

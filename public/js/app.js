@@ -199,6 +199,9 @@ async function renderView() {
       case 'returns':
         await renderReturnsView();
         break;
+      case 'process_return':
+        await renderProcessReturn(AppState.subViewId);
+        break;
       case 'rewards':
         await renderRewardsView();
         break;
@@ -1631,46 +1634,172 @@ async function renderPurchasesList() {
    RETURNS & REVERSALS VIEW
    ========================================================================= */
 
+/* =========================================================================
+   RETURNS, REVERSALS & REPLACEMENTS VIEW & PROCESSOR
+   ========================================================================= */
+
 async function renderReturnsView() {
   const main = document.getElementById('main-content');
-  const res = await API.get('/api/returns');
-  const returns = res.returns || [];
+  
+  // Fetch both processed returns and all purchases
+  const [retRes, purRes] = await Promise.all([
+    API.get('/api/returns'),
+    API.get('/api/purchases')
+  ]);
+
+  const returns = retRes.returns || [];
+  const purchases = (purRes.purchases || []).filter(p => p.status === 'APPROVED');
+  const isAdminOrAuditor = AppState.user.role === 'admin' || AppState.user.role === 'auditor';
 
   main.innerHTML = `
     <div class="top-bar">
       <div>
-        <h1 class="page-title">↩️ Product Returns & Reversals</h1>
-        <p style="font-size:13px;color:var(--text-muted)">Manage customer item returns and proportional point reversals</p>
+        <h1 class="page-title">↩️ Product Returns, Reversals & Exchanges</h1>
+        <p style="font-size:13px;color:var(--text-muted)">
+          Search verified purchases to process customer item returns, product replacements, and automatic points adjustments for workers.
+        </p>
       </div>
     </div>
 
+    <!-- Section 1: Search Purchases to Process Return/Exchange -->
+    <div class="card" style="margin-bottom:20px;border-left:4px solid var(--accent);">
+      <div class="card-header" style="margin-bottom:12px;">
+        <div>
+          <div class="card-title">🔍 Search Customer Purchases for Return / Replacement</div>
+          <small style="color:var(--text-muted)">Find any approved bill by Customer Name, Mechanic Name, Phone, Address, or Bill ID</small>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:14px;">
+        <input 
+          type="text" 
+          id="return-search-input" 
+          placeholder="🔎 Type Customer Name, Mechanic Name, Phone Number, Bill ID (e.g. #102), or Product..." 
+          style="font-size:15px;padding:12px 14px;border:2px solid var(--border-focus);"
+          oninput="filterReturnsPurchases(this.value)"
+          autofocus
+        >
+      </div>
+
+      <div class="table-responsive">
+        <table id="return-search-table">
+          <thead>
+            <tr>
+              <th>Bill ID</th>
+              <th>Date</th>
+              <th>Customer Details</th>
+              <th>Referenced Mechanic</th>
+              <th>Items Billed</th>
+              <th>Bill Amount</th>
+              <th>Points</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${purchases.length === 0 ? `
+              <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No approved purchases found to process returns.</td></tr>
+            ` : purchases.map(p => {
+              const itemSummary = (p.items || []).map(i => `${i.product_name} (${i.quantity} ${i.unit})`).join(', ') || 'General purchase';
+              const searchKey = `${p.id} ${p.customer_name} ${p.customer_phone || ''} ${p.customer_address || ''} ${p.mechanic_name} ${p.mechanic_phone || ''} ${p.trade_type || ''} ${itemSummary}`.toLowerCase();
+              return `
+                <tr data-search="${searchKey}" class="return-purchase-row">
+                  <td><b style="font-size:14px;color:var(--primary);">#${p.id}</b></td>
+                  <td>${p.purchase_date}</td>
+                  <td>
+                    <b>${p.customer_name}</b><br>
+                    <small style="color:var(--text-muted)">${p.customer_phone || 'No phone'}</small>
+                    ${p.customer_address ? `<br><small style="color:var(--text-muted)">📍 ${p.customer_address}</small>` : ''}
+                  </td>
+                  <td>
+                    <b>${p.mechanic_name}</b><br>
+                    <span class="badge" style="background:#E0F2FE;color:#0284C7;font-size:11px;">${p.trade_type || 'Worker'}</span>
+                    <small style="color:var(--text-muted);">${p.mechanic_phone ? ` · 📞 ${p.mechanic_phone}` : ''}</small>
+                  </td>
+                  <td><small>${itemSummary}</small></td>
+                  <td><b style="font-size:14px;color:var(--primary);">${formatINR(p.total_amount)}</b></td>
+                  <td><b style="color:var(--success);">+${p.points_awarded || 0} pts</b></td>
+                  <td>
+                    <button class="btn btn-primary btn-sm" onclick="navigate('process_return', ${p.id})" style="white-space:nowrap;">
+                      ↩️ Process Return / Exchange ➔
+                    </button>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Section 2: Processed Returns & Adjustments Audit Log -->
     <div class="card">
-      <div class="card-title" style="margin-bottom:12px;">Processed Product Returns</div>
+      <div class="card-header" style="margin-bottom:12px;">
+        <div>
+          <div class="card-title">📜 Processed Returns & Points Reversal History (${returns.length})</div>
+          <small style="color:var(--text-muted)">Complete log of all customer returns, replacements, points debits/credits, and worker recovery</small>
+        </div>
+      </div>
+
       <div class="table-responsive">
         <table>
           <thead>
             <tr>
               <th>Date</th>
-              <th>Mechanic</th>
+              <th>Bill ID</th>
+              <th>Referenced Worker</th>
               <th>Customer</th>
               <th>Returned Items</th>
-              <th>Points Reversed</th>
-              <th>Recovery Balance</th>
+              <th>Replacement Items</th>
+              <th>Net Bill</th>
+              <th>Points Change</th>
+              <th>Recovery Pending</th>
               <th>Reason</th>
-              <th>Auditor</th>
+              <th>Processed By</th>
+              <th>Worker Alert</th>
             </tr>
           </thead>
           <tbody>
-            ${returns.length === 0 ? `<tr><td colspan="8">No product returns recorded.</td></tr>` : returns.map(r => `
+            ${returns.length === 0 ? `
+              <tr><td colspan="12" style="text-align:center;padding:24px;color:var(--text-muted);">No product returns recorded yet.</td></tr>
+            ` : returns.map(r => `
               <tr>
                 <td>${r.return_date}</td>
-                <td><b>${r.mechanic_name}</b></td>
+                <td>
+                  <a onclick="navigate('process_return', ${r.purchase_id})" style="font-weight:700;color:var(--accent);cursor:pointer;text-decoration:underline;">
+                    #${r.purchase_id}
+                  </a>
+                </td>
+                <td>
+                  <b>${r.mechanic_name}</b><br>
+                  <small style="color:var(--text-muted)">${r.trade_type || ''}</small>
+                </td>
                 <td>${r.customer_name}</td>
-                <td>${r.items_summary}</td>
-                <td><b style="color:var(--danger)">-${r.points_reversed}</b></td>
-                <td>${r.points_under_recovery > 0 ? `<b style="color:var(--danger)">${r.points_under_recovery} pts</b>` : 'None'}</td>
+                <td>
+                  <span style="color:var(--danger);font-weight:600;">${r.items_summary || '-'}</span>
+                  ${r.returned_value > 0 ? `<br><small style="color:var(--danger)">(-${formatINR(r.returned_value)})</small>` : ''}
+                </td>
+                <td>
+                  <span style="color:var(--success);font-weight:600;">${r.replacement_summary || '-'}</span>
+                  ${r.replacement_value > 0 ? `<br><small style="color:var(--success)">(+${formatINR(r.replacement_value)})</small>` : ''}
+                </td>
+                <td><b>${formatINR(r.updated_net_amount || (r.original_amount - (r.returned_value || 0) + (r.replacement_value || 0)))}</b></td>
+                <td>
+                  ${r.points_change !== undefined && r.points_change !== null ? `
+                    <b style="font-size:14px;color:${r.points_change > 0 ? 'var(--success)' : r.points_change < 0 ? 'var(--danger)' : 'var(--text-muted)'};">
+                      ${r.points_change > 0 ? `+${r.points_change}` : r.points_change} pts
+                    </b>
+                  ` : `
+                    <b style="color:var(--danger)">-${r.points_reversed} pts</b>
+                  `}
+                </td>
+                <td>${r.points_under_recovery > 0 ? `<b style="color:var(--danger)">${r.points_under_recovery} pts</b>` : '<span style="color:var(--text-muted)">None</span>'}</td>
                 <td>${r.reason}</td>
-                <td>${r.processed_by}</td>
+                <td><small style="color:var(--text-muted)">${r.processed_by || 'Admin'}</small></td>
+                <td>
+                  <button class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;font-size:11px;padding:3px 8px;" onclick="triggerSendWorkerNotification(${r.purchase_id})">
+                    💬 WhatsApp
+                  </button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -1679,6 +1808,498 @@ async function renderReturnsView() {
     </div>
   `;
 }
+
+function filterReturnsPurchases(query) {
+  const q = query.toLowerCase().trim();
+  const rows = document.querySelectorAll('#return-search-table tbody .return-purchase-row');
+  let matchCount = 0;
+  rows.forEach(r => {
+    const text = r.getAttribute('data-search') || '';
+    const match = text.includes(q);
+    r.style.display = match ? '' : 'none';
+    if (match) matchCount++;
+  });
+}
+
+/* =========================================================================
+   PROCESS RETURN & REPLACEMENT PAGE (DEDICATED DETAIL VIEW)
+   ========================================================================= */
+
+async function renderProcessReturn(purchaseId) {
+  const main = document.getElementById('main-content');
+  
+  const [purRes, prodsRes] = await Promise.all([
+    API.get(`/api/purchases/${purchaseId}`),
+    API.get('/api/products')
+  ]);
+
+  const p = purRes.purchase;
+  const products = prodsRes.products || [];
+  window._availableProductsForReturn = products;
+  window._currentPurchaseForReturn = p;
+
+  const items = p.items || [];
+  const origAmount = Number(p.total_amount || 0);
+  const origPoints = p.points_awarded !== null ? p.points_awarded : Math.round(origAmount * 3 / 100);
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="navigate('returns')">← Back to Returns & Reversals</button>
+          <button class="btn btn-secondary btn-sm" onclick="navigate('purchases')">🧾 Purchases Directory</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px;flex-wrap:wrap;">
+          <h1 class="page-title" style="margin:0;">↩️ Process Return / Replacement for Bill #${p.id}</h1>
+          <span class="badge badge-approved">VERIFIED & APPROVED</span>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-top:4px;">
+          Adjust customer items, record replacements, and automatically recalculate points for referenced worker <b>${p.mechanic_name}</b>.
+        </p>
+      </div>
+      <div class="top-actions">
+        <a href="tel:${p.mechanic_phone}" class="btn btn-secondary btn-sm">📞 Call ${p.mechanic_name}</a>
+        <a href="https://wa.me/91${p.mechanic_phone}" target="_blank" class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;">💬 WhatsApp Worker</a>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:340px 1fr;gap:20px;align-items:start;" class="return-layout-grid">
+      
+      <!-- Left Column: Bill & Worker Summary Card -->
+      <div>
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:12px;">👤 Customer Details</div>
+          <div style="font-size:14px;line-height:1.6;">
+            <b>Name:</b> ${p.customer_name}<br>
+            <b>Phone:</b> ${p.customer_phone || '<span style="color:var(--text-muted)">Not provided</span>'}<br>
+            <b>Address:</b> ${p.customer_address || '<span style="color:var(--text-muted)">Not provided</span>'}<br>
+            <b>Purchase Date:</b> ${p.purchase_date}
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-title" style="margin-bottom:12px;">👷 Referenced Worker</div>
+          <div style="font-size:14px;line-height:1.6;">
+            <b>Name:</b> <a onclick="navigate('mechanic_detail', ${p.mechanic_id})" style="color:var(--accent);font-weight:700;cursor:pointer;">${p.mechanic_name} ➔</a><br>
+            <b>Trade:</b> ${p.trade_type || 'Worker'}<br>
+            <b>User ID:</b> ${p.mechanic_uid}<br>
+            <b>Phone:</b> ${p.mechanic_phone}<br>
+            <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+              <b>Available Points:</b> <span id="worker-curr-points" style="color:var(--primary);font-weight:700;font-size:15px;">${p.available_points} pts</span><br>
+              ${p.recovery_points > 0 ? `<b>Recovery Pending:</b> <span style="color:var(--danger);font-weight:700;">${p.recovery_points} pts</span><br>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">🧾 Original Bill Details</div>
+          <div style="font-size:14px;line-height:1.6;">
+            <b>Bill Number:</b> #${p.id}<br>
+            <b>Original Bill Amount:</b> <span style="font-size:16px;font-weight:700;color:var(--primary);">${formatINR(origAmount)}</span><br>
+            <b>Points Awarded:</b> <span style="color:var(--success);font-weight:700;">+${origPoints} pts</span><br>
+            ${p.bill_file_url ? `
+              <div style="margin-top:12px;">
+                <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="openBillViewerModal('${p.bill_file_url}', ${p.id})">🖼️ View Uploaded Receipt</button>
+              </div>
+            ` : '<small style="color:var(--text-muted);display:block;margin-top:8px;">No bill photo attached</small>'}
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Interactive Return & Replacement Form -->
+      <div>
+        <form id="process-return-form" onsubmit="handleProcessReturnSubmit(event, ${p.id})">
+          
+          <!-- Block 1: Items to Return / Reverse -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-header" style="margin-bottom:8px;">
+              <div>
+                <div class="card-title" style="color:var(--danger);">↩️ 1. Items to Return / Reverse</div>
+                <small style="color:var(--text-muted)">Select original items being returned by the customer and enter returned monetary value</small>
+              </div>
+            </div>
+
+            ${items.length === 0 ? `
+              <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">No individual line items registered. Enter the total returned monetary value below:</p>
+              <div class="form-group">
+                <label>Returned Items Monetary Value (₹)</label>
+                <input type="number" id="manual-return-val" min="0" step="any" placeholder="e.g. 500" oninput="recalculateReturnMath()">
+              </div>
+            ` : `
+              <div id="return-items-list">
+                ${items.map((it, idx) => {
+                  const maxReturn = Math.max(0, it.quantity - (it.returned_quantity || 0));
+                  return `
+                    <div class="return-item-card" data-item-id="${it.id}">
+                      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div>
+                          <b style="font-size:14px;color:var(--primary);">${it.product_name}</b>
+                          <div style="font-size:12px;color:var(--text-muted);">
+                            Billed Qty: <b>${it.quantity} ${it.unit}</b>
+                            ${it.returned_quantity > 0 ? `· Already Returned: <span style="color:var(--danger);">${it.returned_quantity} ${it.unit}</span>` : ''}
+                            · Remaining: <b>${maxReturn} ${it.unit}</b>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-row">
+                        <div class="form-group" style="margin-bottom:0;">
+                          <label style="font-size:12px;">Return Quantity (${it.unit})</label>
+                          <input 
+                            type="number" 
+                            class="ret-line-qty" 
+                            min="0" 
+                            max="${maxReturn}" 
+                            step="any" 
+                            value="0" 
+                            placeholder="0" 
+                            oninput="recalculateReturnMath()"
+                          >
+                        </div>
+                        <div class="form-group" style="margin-bottom:0;">
+                          <label style="font-size:12px;">Returned Monetary Value (₹)</label>
+                          <input 
+                            type="number" 
+                            class="ret-line-val" 
+                            min="0" 
+                            step="any" 
+                            placeholder="Value to deduct ₹" 
+                            oninput="recalculateReturnMath()"
+                          >
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+
+              <div class="form-group" style="margin-top:12px;">
+                <label style="font-size:12px;color:var(--text-muted);">Additional / General Returned Value (₹) (If any)</label>
+                <input type="number" id="manual-return-val" min="0" step="any" placeholder="0" oninput="recalculateReturnMath()">
+              </div>
+            `}
+          </div>
+
+          <!-- Block 2: Replacement / Exchange Items (New Items Added) -->
+          <div class="card" style="margin-bottom:16px;">
+            <div class="card-header" style="margin-bottom:8px;">
+              <div>
+                <div class="card-title" style="color:var(--success);">🔄 2. Replacement / Exchange Items (New Items Added)</div>
+                <small style="color:var(--text-muted)">If the customer exchanged returned items for new products, add replacement items below</small>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addReplacementItemRow()">+ Add Replacement Item</button>
+            </div>
+
+            <div id="replacement-items-container">
+              <!-- Dynamic replacement rows will appear here -->
+            </div>
+            
+            <p id="no-rep-msg" style="font-size:12px;color:var(--text-muted);font-style:italic;margin-top:4px;">
+              No replacement items added yet. Click "+ Add Replacement Item" above if this is an exchange.
+            </p>
+          </div>
+
+          <!-- Block 3: Real-Time Dynamic Net Bill & Points Calculator -->
+          <div class="calc-summary-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-size:14px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;">📊 Real-Time Adjustment Breakdown</span>
+              <span class="badge" style="background:rgba(255,255,255,0.2);color:#fff;font-size:11px;">Automatic Rate: 3 pts per ₹100</span>
+            </div>
+
+            <div class="calc-summary-grid">
+              <div class="calc-summary-item">
+                <span class="calc-summary-label">Original Bill</span>
+                <span class="calc-summary-val neutral" id="calc-orig-amt">${formatINR(origAmount)}</span>
+              </div>
+
+              <div class="calc-summary-item">
+                <span class="calc-summary-label">Returned Value (-)</span>
+                <span class="calc-summary-val neg" id="calc-ret-val">- ₹0</span>
+              </div>
+
+              <div class="calc-summary-item">
+                <span class="calc-summary-label">Replacement Value (+)</span>
+                <span class="calc-summary-val pos" id="calc-rep-val">+ ₹0</span>
+              </div>
+
+              <div class="calc-summary-item">
+                <span class="calc-summary-label">Updated Net Bill</span>
+                <span class="calc-summary-val" id="calc-net-amt" style="color:#FBBF24;">${formatINR(origAmount)}</span>
+              </div>
+            </div>
+
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.15);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+              <div>
+                <span style="font-size:12px;color:#94A3B8;">Worker Points Impact:</span>
+                <div id="calc-points-change" style="font-size:20px;font-weight:800;color:#94A3B8;">0 Points</div>
+              </div>
+              <div style="text-align:right;">
+                <span style="font-size:12px;color:#94A3B8;">Estimated New Worker Balance:</span>
+                <div id="calc-new-balance" style="font-size:18px;font-weight:700;color:#38BDF8;">${p.available_points} Points</div>
+              </div>
+            </div>
+            <div id="calc-recovery-notice" style="display:none;margin-top:8px;font-size:12px;color:#FCA5A5;background:rgba(220,38,38,0.2);padding:6px 10px;border-radius:4px;"></div>
+          </div>
+
+          <!-- Block 4: Reason & Confirmation Submit -->
+          <div class="card" style="margin-top:16px;">
+            <div class="form-group">
+              <label>Reason for Return / Replacement / Point Adjustment <span style="color:var(--danger)">*</span></label>
+              <textarea 
+                id="return-reason" 
+                rows="3" 
+                required 
+                placeholder="e.g. Customer returned 2 defective pipes, exchanged with heavy duty fittings, difference adjusted in bill..."
+              ></textarea>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;flex-wrap:wrap;gap:12px;">
+              <button type="button" class="btn btn-secondary" onclick="navigate('returns')">Cancel</button>
+              <button type="submit" class="btn btn-primary btn-lg" id="submit-return-btn">
+                💾 Process Return & Adjust Points
+              </button>
+            </div>
+          </div>
+
+        </form>
+      </div>
+
+    </div>
+  `;
+}
+
+function addReplacementItemRow() {
+  const container = document.getElementById('replacement-items-container');
+  const noMsg = document.getElementById('no-rep-msg');
+  if (noMsg) noMsg.style.display = 'none';
+  if (!container) return;
+
+  const rowId = 'rep_row_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const products = window._availableProductsForReturn || [];
+
+  const div = document.createElement('div');
+  div.id = rowId;
+  div.className = 'rep-item-card';
+  div.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <b style="font-size:13px;color:var(--success);">✨ New Replacement Item</b>
+      <button type="button" class="btn btn-danger btn-sm" style="padding:2px 6px;font-size:11px;" onclick="removeReplacementRow('${rowId}')">✕ Remove</button>
+    </div>
+    
+    <div class="form-row" style="margin-bottom:8px;">
+      <div style="flex:2;">
+        <label style="font-size:11px;font-weight:600;">Product Name / Item</label>
+        <input type="text" class="rep-prod-name" placeholder="Item Name (e.g. 1-inch Brass Valve)" list="rep-prods-list" required oninput="recalculateReturnMath()">
+        <datalist id="rep-prods-list">
+          ${products.map(pr => `<option value="${pr.name}">${pr.category || ''} (${pr.unit})</option>`).join('')}
+        </datalist>
+      </div>
+      <div style="flex:1;">
+        <label style="font-size:11px;font-weight:600;">Quantity</label>
+        <input type="number" class="rep-prod-qty" min="0" step="any" value="1" placeholder="Qty" oninput="recalculateReturnMath()">
+      </div>
+      <div style="flex:0.8;">
+        <label style="font-size:11px;font-weight:600;">Unit</label>
+        <input type="text" class="rep-prod-unit" value="Piece" placeholder="Unit">
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:0;">
+      <label style="font-size:11px;font-weight:600;">Replacement Item Value (₹)</label>
+      <input type="number" class="rep-prod-val" min="0" step="any" placeholder="Price of new item ₹" required oninput="recalculateReturnMath()">
+    </div>
+  `;
+
+  container.appendChild(div);
+  recalculateReturnMath();
+}
+
+function removeReplacementRow(rowId) {
+  const el = document.getElementById(rowId);
+  if (el) el.remove();
+  const container = document.getElementById('replacement-items-container');
+  const noMsg = document.getElementById('no-rep-msg');
+  if (container && container.children.length === 0 && noMsg) {
+    noMsg.style.display = 'block';
+  }
+  recalculateReturnMath();
+}
+
+function recalculateReturnMath() {
+  const p = window._currentPurchaseForReturn;
+  if (!p) return;
+
+  const origAmount = Number(p.total_amount || 0);
+  const currWorkerPts = Number(p.available_points || 0);
+
+  // 1. Calculate Returned Monetary Value
+  let totalReturnedVal = 0;
+  const lineValInputs = document.querySelectorAll('.ret-line-val');
+  lineValInputs.forEach(inp => {
+    totalReturnedVal += parseFloat(inp.value) || 0;
+  });
+  const manualRet = parseFloat(document.getElementById('manual-return-val')?.value) || 0;
+  totalReturnedVal += manualRet;
+
+  // 2. Calculate Replacement Monetary Value
+  let totalReplacementVal = 0;
+  const repValInputs = document.querySelectorAll('.rep-prod-val');
+  repValInputs.forEach(inp => {
+    totalReplacementVal += parseFloat(inp.value) || 0;
+  });
+
+  // 3. Updated Net Bill Amount
+  const updatedNetAmount = Math.max(0, origAmount - totalReturnedVal + totalReplacementVal);
+
+  // 4. Net Points Change (Formula: net value difference * 3 points per ₹100)
+  const netValueChange = totalReplacementVal - totalReturnedVal;
+  let pointsChange = 0;
+  if (totalReturnedVal > 0 || totalReplacementVal > 0) {
+    pointsChange = Math.round(netValueChange * 3 / 100);
+  }
+
+  // 5. Worker points balance calculation
+  let newBalance = currWorkerPts;
+  let recoveryMsg = '';
+
+  if (pointsChange < 0) {
+    const toDeduct = Math.abs(pointsChange);
+    if (toDeduct <= currWorkerPts) {
+      newBalance = currWorkerPts - toDeduct;
+    } else {
+      newBalance = 0;
+      const underRecovery = toDeduct - currWorkerPts;
+      recoveryMsg = `⚠️ Deduction (${toDeduct} pts) exceeds available balance (${currWorkerPts} pts). Remaining ${underRecovery} pts will be marked for Recovery from future bills.`;
+    }
+  } else if (pointsChange > 0) {
+    newBalance = currWorkerPts + pointsChange;
+  }
+
+  // Update UI Elements
+  const elRet = document.getElementById('calc-ret-val');
+  const elRep = document.getElementById('calc-rep-val');
+  const elNet = document.getElementById('calc-net-amt');
+  const elPts = document.getElementById('calc-points-change');
+  const elBal = document.getElementById('calc-new-balance');
+  const elRec = document.getElementById('calc-recovery-notice');
+
+  if (elRet) elRet.textContent = `- ₹${totalReturnedVal.toLocaleString('en-IN')}`;
+  if (elRep) elRep.textContent = `+ ₹${totalReplacementVal.toLocaleString('en-IN')}`;
+  if (elNet) elNet.textContent = `₹${updatedNetAmount.toLocaleString('en-IN')}`;
+
+  if (elPts) {
+    if (pointsChange > 0) {
+      elPts.textContent = `+${pointsChange} Points (Increment)`;
+      elPts.style.color = '#4ADE80';
+    } else if (pointsChange < 0) {
+      elPts.textContent = `${pointsChange} Points (Decrement)`;
+      elPts.style.color = '#F87171';
+    } else {
+      elPts.textContent = `0 Points (No change)`;
+      elPts.style.color = '#94A3B8';
+    }
+  }
+
+  if (elBal) {
+    elBal.textContent = `${newBalance} Points`;
+  }
+
+  if (elRec) {
+    if (recoveryMsg) {
+      elRec.textContent = recoveryMsg;
+      elRec.style.display = 'block';
+    } else {
+      elRec.style.display = 'none';
+    }
+  }
+}
+
+async function handleProcessReturnSubmit(e, purchaseId) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-return-btn');
+
+  // Collect returned line items
+  const returnedItems = [];
+  const retCards = document.querySelectorAll('.return-item-card');
+  retCards.forEach(card => {
+    const itemId = parseInt(card.getAttribute('data-item-id'), 10);
+    const qty = parseFloat(card.querySelector('.ret-line-qty')?.value) || 0;
+    const val = parseFloat(card.querySelector('.ret-line-val')?.value) || 0;
+    if (qty > 0 || val > 0) {
+      returnedItems.push({
+        itemId,
+        returnedQuantity: qty,
+        returnedValue: val
+      });
+    }
+  });
+
+  // Collect replacement items
+  const replacementItems = [];
+  const repCards = document.querySelectorAll('.rep-item-card');
+  repCards.forEach(card => {
+    const name = card.querySelector('.rep-prod-name')?.value.trim();
+    const qty = parseFloat(card.querySelector('.rep-prod-qty')?.value) || 1;
+    const unit = card.querySelector('.rep-prod-unit')?.value.trim() || 'Piece';
+    const price = parseFloat(card.querySelector('.rep-prod-val')?.value) || 0;
+    if (name) {
+      replacementItems.push({
+        productName: name,
+        quantity: qty,
+        unit,
+        price
+      });
+    }
+  });
+
+  // Calculate totals
+  let returnedValue = 0;
+  returnedItems.forEach(r => returnedValue += (r.returnedValue || 0));
+  const manualRet = parseFloat(document.getElementById('manual-return-val')?.value) || 0;
+  returnedValue += manualRet;
+
+  let replacementValue = 0;
+  replacementItems.forEach(r => replacementValue += (r.price || 0));
+
+  const reason = document.getElementById('return-reason').value.trim();
+
+  if (returnedItems.length === 0 && replacementItems.length === 0 && returnedValue <= 0 && replacementValue <= 0) {
+    return showToast('Please enter return quantities/values or add replacement items', 'error');
+  }
+
+  if (!reason) {
+    return showToast('Please provide a reason for the return / replacement', 'error');
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Processing Return & Points Adjustment...';
+
+  try {
+    const payload = {
+      returnedItems,
+      replacementItems,
+      returnedValue,
+      replacementValue,
+      reason
+    };
+
+    const res = await API.post(`/api/purchases/${purchaseId}/return`, payload);
+    showToast('Return & points adjustment processed successfully!', 'success');
+
+    // Automatically trigger WhatsApp and SMS notification popup for worker
+    if (res.notification) {
+      showWorkerNotificationModal(res.notification, () => {
+        navigate('returns');
+      });
+    } else {
+      navigate('returns');
+    }
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '💾 Process Return & Adjust Points';
+  }
+}
+
 
 /* =========================================================================
    REWARDS & REDEMPTIONS VIEW
