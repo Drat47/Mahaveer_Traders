@@ -177,6 +177,9 @@ async function renderView() {
         else if (AppState.user.role === 'auditor') await renderAuditorDashboard();
         else await renderMechanicDashboard();
         break;
+      case 'category_workers':
+        await renderCategoryWorkers(AppState.subViewId);
+        break;
       case 'audit_feed':
       case 'verifications':
         await renderBillVerifications();
@@ -472,26 +475,29 @@ async function renderAdminDashboard() {
 
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Field Category Performance</div>
+          <div>
+            <div class="card-title">Field Category Performance</div>
+            <small style="color:var(--text-muted)">Click any trade category to view its workers and profiles</small>
+          </div>
           <button class="btn btn-secondary btn-sm" onclick="navigate('reports')">Full Report</button>
         </div>
         <div class="table-responsive">
           <table>
             <thead>
               <tr>
-                <th>Trade Type</th>
-                <th>Mechanics</th>
+                <th>Trade Type (Click to Open)</th>
+                <th>Workers</th>
                 <th>Approved Sales</th>
-                <th>Pending</th>
+                <th>Pending Bills</th>
               </tr>
             </thead>
             <tbody>
               ${(stats.tradeBreakdown || []).map(t => `
-                <tr>
-                  <td><b>${t.type}</b></td>
-                  <td>${t.mechanics_count}</td>
+                <tr style="cursor:pointer;" onclick="navigate('category_workers', '${t.type}')" title="Click to view all ${t.type} workers">
+                  <td><b style="color:var(--accent);">${t.type}</b> <span style="font-size:12px;color:var(--accent);">➔</span></td>
+                  <td><b>${t.mechanics_count}</b></td>
                   <td>${formatINR(t.approved_value)}</td>
-                  <td>${t.pending_bills > 0 ? `<span class="badge badge-pending">${t.pending_bills}</span>` : '0'}</td>
+                  <td>${t.pending_bills > 0 ? `<span class="badge badge-pending">${t.pending_bills} pending</span>` : '<span style="color:var(--text-muted)">0</span>'}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -521,7 +527,26 @@ async function renderAdminDashboard() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              footer: () => '👉 Click bar to view category workers'
+            }
+          }
+        },
+        onClick: (event, elements) => {
+          if (elements && elements.length > 0) {
+            const index = elements[0].index;
+            const selectedCategory = labels[index];
+            if (selectedCategory) {
+              navigate('category_workers', selectedCategory);
+            }
+          }
+        },
+        onHover: (event, chartElement) => {
+          event.native.target.style.cursor = chartElement[0] ? 'pointer' : 'default';
+        },
         scales: {
           y: { beginAtZero: true, ticks: { callback: v => '₹' + v.toLocaleString() } }
         }
@@ -1096,7 +1121,134 @@ async function toggleMechanicStatus(id) {
 }
 
 /* =========================================================================
-   MECHANIC DETAIL & POINTS LEDGER VIEW
+   CATEGORY WORKERS VIEW (NEW PAGE WHEN CLICKING TRADE CATEGORY)
+   ========================================================================= */
+
+async function renderCategoryWorkers(categoryType) {
+  const main = document.getElementById('main-content');
+  const type = categoryType || 'All';
+  const res = await API.get(`/api/mechanics?type=${encodeURIComponent(type)}`);
+  const mechanics = res.mechanics || [];
+  const isAdmin = AppState.user.role === 'admin';
+
+  // Compute category specific totals
+  const totalWorkers = mechanics.length;
+  const activeWorkers = mechanics.filter(m => m.is_active).length;
+  const totalLifetimePoints = mechanics.reduce((sum, m) => sum + (m.lifetime_points || 0), 0);
+  const totalAvailablePoints = mechanics.reduce((sum, m) => sum + (m.available_points || 0), 0);
+  const totalPendingBills = mechanics.reduce((sum, m) => sum + (m.pending_bills_count || 0), 0);
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('dash')" style="margin-bottom:8px;">← Back to Dashboard</button>
+        <h1 class="page-title">👷 ${type} Category Workers</h1>
+        <p style="font-size:13px;color:var(--text-muted)">
+          All registered ${type} professionals. Click any worker's name to view their complete profile, bills & transaction ledger.
+        </p>
+      </div>
+      <div class="top-actions">
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openAddMechanicModal()">+ Add ${type}</button>` : ''}
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Total ${type}s</div>
+        <div class="stat-value">${totalWorkers}</div>
+        <span style="font-size:11px;color:var(--success)">${activeWorkers} Active in Field</span>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Available Points</div>
+        <div class="stat-value" style="color:var(--primary);">${totalAvailablePoints.toLocaleString()}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Across all ${type}s</span>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Lifetime Points</div>
+        <div class="stat-value" style="color:var(--success);">${totalLifetimePoints.toLocaleString()}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Total earned to date</span>
+      </div>
+
+      <div class="stat-card ${totalPendingBills > 0 ? 'highlight' : ''}">
+        <div class="stat-label">Pending Verifications</div>
+        <div class="stat-value" style="color:${totalPendingBills > 0 ? 'var(--warning)' : 'var(--primary)'};">${totalPendingBills}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Awaiting bill audit</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div class="form-row">
+        <input type="text" id="cat-mech-search" placeholder="Search ${type}s by name, phone, user ID, or address..." oninput="filterCategoryMechanicsTable(this.value)">
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <div class="table-responsive">
+        <table id="cat-mechanics-table">
+          <thead>
+            <tr>
+              <th>User ID</th>
+              <th>Worker Name (Click to View Details)</th>
+              <th>Phone / Quick Contact</th>
+              <th>Address / Shop</th>
+              <th>Available Points</th>
+              <th>Lifetime Points</th>
+              <th>Pending Bills</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mechanics.length === 0 ? `
+              <tr><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);">No workers found registered in ${type} category.</td></tr>
+            ` : mechanics.map(m => `
+              <tr data-search="${(m.name + m.phone + m.uid + m.trade_type + m.address).toLowerCase()}">
+                <td><b>${m.uid}</b></td>
+                <td>
+                  <a onclick="navigate('mechanic_detail', ${m.id})" style="color:var(--accent);font-weight:700;font-size:14px;cursor:pointer;text-decoration:underline;">
+                    ${m.name} ➔
+                  </a>
+                </td>
+                <td>
+                  <b>${m.phone}</b>
+                  <div style="display:flex;gap:4px;margin-top:4px;">
+                    <a href="tel:${m.phone}" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;" title="Call">📞 Call</a>
+                    <a href="https://wa.me/91${m.phone}" target="_blank" class="btn btn-secondary btn-sm" style="padding:2px 6px;font-size:11px;background:#DCFCE7;color:#166534;" title="WhatsApp">💬 WA</a>
+                  </div>
+                </td>
+                <td><small style="color:var(--text-muted)">${m.address}</small></td>
+                <td>
+                  <b style="color:var(--primary);font-size:15px;">${m.available_points}</b>
+                  ${m.recovery_points > 0 ? `<br><small style="color:var(--danger)">Recovery: ${m.recovery_points}</small>` : ''}
+                </td>
+                <td><b style="color:var(--success);">${m.lifetime_points}</b></td>
+                <td>${m.pending_bills_count > 0 ? `<span class="badge badge-pending">${m.pending_bills_count} pending</span>` : '<span style="color:var(--text-muted)">0</span>'}</td>
+                <td><span class="badge ${m.is_active ? 'badge-active' : 'badge-inactive'}">${m.is_active ? 'Active' : 'Inactive'}</span></td>
+                <td>
+                  <button class="btn btn-primary btn-sm" onclick="navigate('mechanic_detail', ${m.id})">View Full Profile ➔</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function filterCategoryMechanicsTable(query) {
+  const q = query.toLowerCase().trim();
+  const rows = document.querySelectorAll('#cat-mechanics-table tbody tr');
+  rows.forEach(r => {
+    const text = r.getAttribute('data-search') || '';
+    r.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+
+/* =========================================================================
+   MECHANIC DETAIL & COMPLETE PROFILE VIEW
    ========================================================================= */
 
 async function renderMechanicDetail(mechanicId) {
@@ -1107,60 +1259,153 @@ async function renderMechanicDetail(mechanicId) {
   const purchases = res.purchases || [];
   const isAdmin = AppState.user.role === 'admin';
 
+  const approvedPurchases = purchases.filter(p => p.status === 'APPROVED');
+  const pendingPurchases = purchases.filter(p => p.status === 'PENDING');
+  const totalApprovedSpend = approvedPurchases.reduce((sum, p) => sum + (p.total_amount || 0), 0);
+
   main.innerHTML = `
     <div class="top-bar">
       <div>
-        <button class="btn btn-secondary btn-sm" onclick="navigate('mechanics')">← Back to Mechanics</button>
-        <h1 class="page-title" style="margin-top:8px;">${m.name} (${m.uid})</h1>
-        <p style="font-size:13px;color:var(--text-muted)">${m.trade_type} · ${m.phone} · ${m.address}</p>
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="navigate('category_workers', '${m.trade_type}')">← Back to ${m.trade_type} Category</button>
+          <button class="btn btn-secondary btn-sm" onclick="navigate('mechanics')">👷 All Mechanics</button>
+          <button class="btn btn-secondary btn-sm" onclick="navigate('dash')">📊 Dashboard</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap;">
+          <h1 class="page-title" style="margin:0;">${m.name}</h1>
+          <span class="badge" style="background:#E0F2FE;color:#0284C7;font-size:13px;">${m.trade_type}</span>
+          <span class="badge ${m.is_active ? 'badge-active' : 'badge-inactive'}">${m.is_active ? 'Active Account' : 'Inactive'}</span>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-top:4px;">
+          <b>User ID:</b> ${m.uid} · <b>Phone:</b> ${m.phone} · <b>Location:</b> ${m.address}
+        </p>
       </div>
       <div class="top-actions">
-        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openAdjustPointsModal(${m.id}, '${m.name}')">± Adjust Points</button>` : ''}
+        <a href="tel:${m.phone}" class="btn btn-secondary btn-sm">📞 Call Worker</a>
+        <a href="https://wa.me/91${m.phone}" target="_blank" class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;">💬 WhatsApp</a>
+        ${isAdmin ? `
+          <button class="btn btn-primary btn-sm" onclick="openAdjustPointsModal(${m.id}, '${m.name}')">± Adjust Points</button>
+          <button class="btn btn-secondary btn-sm" onclick="toggleMechanicStatusDetail(${m.id})">${m.is_active ? 'Deactivate' : 'Activate'}</button>
+        ` : ''}
       </div>
     </div>
 
+    <!-- Overview KPI Grid -->
     <div class="stats-grid">
       <div class="stat-card">
         <div class="stat-label">Available Points</div>
         <div class="stat-value" style="color:var(--primary);">${m.available_points}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Ready for redemption</span>
       </div>
+
       <div class="stat-card">
         <div class="stat-label">Lifetime Earned</div>
         <div class="stat-value" style="color:var(--success);">${m.lifetime_points}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Total points earned</span>
       </div>
-      <div class="stat-card">
+
+      <div class="stat-card ${m.recovery_points > 0 ? 'highlight' : ''}">
         <div class="stat-label">Recovery Pending</div>
         <div class="stat-value" style="color:${m.recovery_points > 0 ? 'var(--danger)' : 'var(--text-muted)'};">${m.recovery_points}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Deducted from future bills</span>
       </div>
+
       <div class="stat-card">
-        <div class="stat-label">Total Purchases</div>
-        <div class="stat-value">${purchases.length}</div>
+        <div class="stat-label">Approved Purchases</div>
+        <div class="stat-value" style="color:var(--success);">${approvedPurchases.length}</div>
+        <span style="font-size:11px;color:var(--text-muted)">${formatINR(totalApprovedSpend)} total value</span>
       </div>
     </div>
 
+    <!-- Purchases History Table Card -->
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">
+        <div>
+          <div class="card-title">🧾 Purchase & Bill Submissions (${purchases.length})</div>
+          <small style="color:var(--text-muted)">All historical bills submitted by ${m.name}</small>
+        </div>
+        ${pendingPurchases.length > 0 ? `<span class="badge badge-pending">${pendingPurchases.length} Pending Verification</span>` : ''}
+      </div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Bill ID</th>
+              <th>Date</th>
+              <th>Customer Details</th>
+              <th>Products / Items</th>
+              <th>Total Amount</th>
+              <th>Status</th>
+              <th>Points Awarded</th>
+              <th>Receipt</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${purchases.length === 0 ? `
+              <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No purchases submitted yet.</td></tr>
+            ` : purchases.map(p => `
+              <tr>
+                <td><b>#${p.id}</b></td>
+                <td>${p.purchase_date}</td>
+                <td>
+                  <b>${p.customer_name}</b><br>
+                  <small style="color:var(--text-muted)">${p.customer_phone}</small><br>
+                  <small style="color:var(--text-muted)">${p.customer_address}</small>
+                </td>
+                <td>${(p.items || []).map(i => `${i.product_name} (${i.quantity} ${i.unit})`).join('<br>') || '-'}</td>
+                <td><b style="font-size:14px;">${formatINR(p.total_amount)}</b></td>
+                <td>
+                  <span class="badge badge-${p.status.toLowerCase()}">${p.status}</span>
+                  ${p.rejection_reason ? `<br><small style="color:var(--danger)">Reason: ${p.rejection_reason}</small>` : ''}
+                  ${p.correction_message ? `<br><small style="color:var(--warning)">Msg: ${p.correction_message}</small>` : ''}
+                </td>
+                <td><b style="color:${p.points_awarded ? 'var(--success)' : 'inherit'};">${p.points_awarded !== null ? `+${p.points_awarded} pts` : '-'}</b></td>
+                <td>
+                  ${p.bill_file_url ? `
+                    <button class="btn btn-secondary btn-sm" onclick="openBillViewerModal('${p.bill_file_url}', ${p.id})">🖼️ View Bill</button>
+                  ` : '<span style="color:var(--text-muted);font-size:12px;">No photo</span>'}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Points Ledger & Audit Trail -->
     <div class="card">
-      <div class="card-title" style="margin-bottom:12px;">📜 Points Transaction Ledger</div>
+      <div class="card-header">
+        <div>
+          <div class="card-title">📜 Points Transaction Ledger & History</div>
+          <small style="color:var(--text-muted)">Complete chronological audit statement of credits, debits, reversals, and adjustments</small>
+        </div>
+      </div>
       <div class="table-responsive">
         <table>
           <thead>
             <tr>
               <th>Timestamp</th>
-              <th>Type</th>
-              <th>Description</th>
-              <th>Points</th>
+              <th>Transaction Type</th>
+              <th>Description / Reason</th>
+              <th>Points Change</th>
               <th>Balance After</th>
-              <th>Auditor / Actor</th>
+              <th>Auditor / System Actor</th>
             </tr>
           </thead>
           <tbody>
-            ${ledger.length === 0 ? `<tr><td colspan="6">No transaction records found.</td></tr>` : ledger.map(t => `
+            ${ledger.length === 0 ? `
+              <tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No transaction records found.</td></tr>
+            ` : ledger.map(t => `
               <tr>
                 <td>${t.created_at}</td>
                 <td><span class="badge" style="background:#E2E8F0;">${t.type}</span></td>
-                <td>${t.description}${t.reason ? `<br><small style="color:var(--text-muted)">Reason: ${t.reason}</small>` : ''}</td>
-                <td><b style="color:${t.points >= 0 ? 'var(--success)' : 'var(--danger)'};">${t.points > 0 ? '+' : ''}${t.points}</b></td>
-                <td><b>${t.balance_after}</b></td>
-                <td>${t.created_by}</td>
+                <td>
+                  ${t.description}
+                  ${t.reason ? `<br><small style="color:var(--text-muted)">Reason: ${t.reason}</small>` : ''}
+                </td>
+                <td><b style="font-size:14px;color:${t.points >= 0 ? 'var(--success)' : 'var(--danger)'};">${t.points > 0 ? '+' : ''}${t.points} pts</b></td>
+                <td><b>${t.balance_after} pts</b></td>
+                <td>${t.created_by || 'System'}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -1168,6 +1413,14 @@ async function renderMechanicDetail(mechanicId) {
       </div>
     </div>
   `;
+}
+
+async function toggleMechanicStatusDetail(id) {
+  try {
+    await API.patch(`/api/mechanics/${id}/status`, {});
+    showToast('Mechanic status updated', 'success');
+    renderMechanicDetail(id);
+  } catch (e) {}
 }
 
 // Modal: Manual Point Adjustment
