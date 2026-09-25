@@ -1006,6 +1006,46 @@ const server = http.createServer(async (req, res) => {
       return sendJson({ success: true, is_active: newStatus });
     }
 
+    const rewEditMatch = pathname.match(/^\/api\/rewards\/(\d+)$/);
+    if (rewEditMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const user = authenticate(req);
+      if (!user || user.role !== 'admin') return sendError('Forbidden', 403);
+      const id = parseInt(rewEditMatch[1], 10);
+      const rew = db.prepare("SELECT * FROM rewards WHERE id = ?").get(id);
+      if (!rew) return sendError('Reward not found', 404);
+
+      const body = await parseJsonBody(req);
+      const { name, pointsRequired, stock, eligibleTypes } = body;
+      const typesJson = JSON.stringify(eligibleTypes && eligibleTypes.length ? eligibleTypes : ['all']);
+
+      db.prepare(`
+        UPDATE rewards 
+        SET name = ?, points_required = ?, stock = ?, eligible_types = ?
+        WHERE id = ?
+      `).run(
+        name ? name.trim() : rew.name,
+        pointsRequired !== undefined ? parseInt(pointsRequired, 10) : rew.points_required,
+        stock !== undefined ? parseInt(stock, 10) : rew.stock,
+        typesJson,
+        id
+      );
+
+      logAudit(user.name, user.role, 'Edit Reward', `Updated reward #${id} (${name || rew.name})`, req);
+      return sendJson({ success: true, message: 'Reward updated successfully' });
+    }
+
+    if (rewEditMatch && req.method === 'DELETE') {
+      const user = authenticate(req);
+      if (!user || user.role !== 'admin') return sendError('Forbidden', 403);
+      const id = parseInt(rewEditMatch[1], 10);
+      const rew = db.prepare("SELECT * FROM rewards WHERE id = ?").get(id);
+      if (!rew) return sendError('Reward not found', 404);
+
+      db.prepare("DELETE FROM rewards WHERE id = ?").run(id);
+      logAudit(user.name, user.role, 'Delete Reward', `Deleted reward #${id} (${rew.name})`, req);
+      return sendJson({ success: true, message: 'Reward deleted successfully' });
+    }
+
     // Redemptions List & Request
     if (pathname === '/api/redemptions' && req.method === 'GET') {
       const user = authenticate(req);

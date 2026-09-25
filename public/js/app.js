@@ -2305,6 +2305,10 @@ async function handleProcessReturnSubmit(e, purchaseId) {
    REWARDS & REDEMPTIONS VIEW
    ========================================================================= */
 
+/* =========================================================================
+   REWARDS & REDEMPTIONS VIEW & MANAGEMENT
+   ========================================================================= */
+
 async function renderRewardsView() {
   const main = document.getElementById('main-content');
   const rewRes = await API.get('/api/rewards');
@@ -2322,7 +2326,7 @@ async function renderRewardsView() {
       <div>
         <h1 class="page-title">🎁 Rewards Catalog</h1>
         <p style="font-size:13px;color:var(--text-muted)">
-          ${isMechanic ? `Your Available Points: <b style="color:var(--primary);font-size:16px;">${mechPoints} pts</b>` : 'Manage reward items and trade eligibility'}
+          ${isMechanic ? `Your Available Points: <b style="color:var(--primary);font-size:16px;">${mechPoints} pts</b>` : 'Manage catalog items, points required, stock inventory, and trade eligibility'}
         </p>
       </div>
       <div class="top-actions">
@@ -2330,38 +2334,267 @@ async function renderRewardsView() {
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;">
-      ${rewards.map(r => {
-        const isEligible = isMechanic ? (mechPoints >= r.points_required && r.stock > 0) : true;
-        return `
-          <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;">
-            <div>
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <h3 style="font-size:16px;font-weight:700;color:var(--primary);">${r.name}</h3>
-                <span class="badge ${r.stock > 0 ? 'badge-active' : 'badge-inactive'}">${r.stock > 0 ? `${r.stock} in stock` : 'Out of Stock'}</span>
+    ${rewards.length === 0 ? `
+      <div class="card" style="text-align:center;padding:48px;">
+        <p style="font-size:16px;color:var(--text-muted);margin-bottom:16px;">No reward items available in catalog yet.</p>
+        ${isAdmin ? `<button class="btn btn-primary" onclick="openAddRewardModal()">+ Add First Reward Item</button>` : ''}
+      </div>
+    ` : `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
+        ${rewards.map(r => {
+          const isEligible = isMechanic ? (mechPoints >= r.points_required && r.stock > 0) : true;
+          return `
+            <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;border-top:3px solid ${r.is_active ? 'var(--accent)' : 'var(--border)'};">
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+                  <h3 style="font-size:16px;font-weight:700;color:var(--primary);margin:0;">${r.name}</h3>
+                  <span class="badge ${r.stock > 0 ? (r.is_active ? 'badge-active' : 'badge-inactive') : 'badge-inactive'}">
+                    ${r.stock > 0 ? `${r.stock} in stock` : 'Out of Stock'}
+                  </span>
+                </div>
+                
+                <div style="margin:14px 0;">
+                  <span style="font-size:24px;font-weight:800;color:var(--accent);">${r.points_required.toLocaleString()}</span>
+                  <span style="font-size:13px;color:var(--text-muted);font-weight:600;margin-left:4px;">Points</span>
+                </div>
+
+                <div style="font-size:12px;color:var(--text-muted);background:#F8FAFC;padding:8px 10px;border-radius:var(--radius-sm);">
+                  <b>Eligible:</b> ${(r.eligible_types || []).includes('all') ? '🌟 All Trade Professionals' : (r.eligible_types || []).join(', ')}
+                </div>
               </div>
-              <div style="margin:12px 0;">
-                <span style="font-size:20px;font-weight:700;color:var(--accent);">${r.points_required} Points</span>
-              </div>
-              <div style="font-size:12px;color:var(--text-muted);">
-                <b>Eligible:</b> ${(r.eligible_types || []).join(', ')}
+
+              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+                ${isMechanic ? `
+                  <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name}')">
+                    ${r.stock < 1 ? 'Out of Stock' : mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
+                  </button>
+                ` : `
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <div style="display:flex;gap:6px;">
+                      <button class="btn btn-secondary btn-sm" onclick="openEditRewardModal(${r.id}, '${r.name.replace(/'/g, "\\'")}', ${r.points_required}, ${r.stock}, ${JSON.stringify(r.eligible_types).replace(/"/g, '&quot;')})">✏️ Edit</button>
+                      <button class="btn btn-secondary btn-sm" onclick="toggleRewardActive(${r.id})">${r.is_active ? 'Deactivate' : 'Activate'}</button>
+                    </div>
+                    <button class="btn btn-danger btn-sm" onclick="deleteReward(${r.id}, '${r.name.replace(/'/g, "\\'")}')">🗑️</button>
+                  </div>
+                `}
               </div>
             </div>
+          `;
+        }).join('')}
+      </div>
+    `}
+  `;
+}
 
-            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
-              ${isMechanic ? `
-                <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name}')">
-                  ${r.stock < 1 ? 'Out of Stock' : mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
-                </button>
-              ` : `
-                <button class="btn btn-secondary btn-sm" onclick="toggleRewardActive(${r.id})">${r.is_active ? 'Deactivate' : 'Activate'}</button>
-              `}
+// Modal: Add Reward Item
+function openAddRewardModal() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:500px;">
+        <div class="modal-header">
+          <div class="card-title">🎁 Add New Reward Item</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <form onsubmit="handleAddRewardSubmit(event)">
+          <div class="form-group">
+            <label>Reward Item Name <span style="color:var(--danger)">*</span></label>
+            <input type="text" id="new-reward-name" required placeholder="e.g. Prestige Induction Cooktop, Professional Toolkit, Mixer Grinder...">
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label>Points Required <span style="color:var(--danger)">*</span></label>
+              <input type="number" id="new-reward-points" required min="1" placeholder="e.g. 500">
+            </div>
+            <div class="form-group">
+              <label>Stock Quantity <span style="color:var(--danger)">*</span></label>
+              <input type="number" id="new-reward-stock" required min="0" value="5" placeholder="e.g. 10">
             </div>
           </div>
-        `;
-      }).join('')}
+
+          <div class="form-group">
+            <label>Eligible Trade Categories</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+              <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1 / -1;border-bottom:1px solid var(--border);padding-bottom:6px;">
+                <input type="checkbox" id="trade-all" value="all" checked onchange="handleTradeAllToggle(this)"> <b>🌟 All Trade Professionals</b>
+              </label>
+              ${TRADE_TYPES.map(t => `
+                <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                  <input type="checkbox" class="trade-item-check" value="${t}" checked> ${t}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="save-reward-btn">Save Reward Item</button>
+          </div>
+        </form>
+      </div>
     </div>
   `;
+}
+
+function handleTradeAllToggle(allCheck) {
+  const checks = document.querySelectorAll('.trade-item-check');
+  checks.forEach(c => c.checked = allCheck.checked);
+}
+
+async function handleAddRewardSubmit(e) {
+  e.preventDefault();
+  const btn = document.getElementById('save-reward-btn');
+  const name = document.getElementById('new-reward-name').value.trim();
+  const pointsRequired = parseInt(document.getElementById('new-reward-points').value, 10);
+  const stock = parseInt(document.getElementById('new-reward-stock').value, 10);
+
+  const allTradesChecked = document.getElementById('trade-all')?.checked;
+  const checks = document.querySelectorAll('.trade-item-check:checked');
+  let eligibleTypes = [];
+  if (allTradesChecked || checks.length === TRADE_TYPES.length) {
+    eligibleTypes = ['all'];
+  } else {
+    eligibleTypes = Array.from(checks).map(c => c.value);
+    if (eligibleTypes.length === 0) eligibleTypes = ['all'];
+  }
+
+  if (!name || isNaN(pointsRequired) || pointsRequired <= 0) {
+    return showToast('Please enter a valid reward name and required points', 'error');
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    await API.post('/api/rewards', {
+      name,
+      pointsRequired,
+      stock: isNaN(stock) ? 0 : stock,
+      eligibleTypes
+    });
+    showToast(`Reward "${name}" added to catalog successfully!`, 'success');
+    closeModal();
+    renderRewardsView();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Save Reward Item';
+  }
+}
+
+// Modal: Edit Reward Item
+function openEditRewardModal(id, currentName, currentPoints, currentStock, currentEligible) {
+  const modalRoot = document.getElementById('modal-root');
+  let elig = currentEligible || ['all'];
+  if (typeof elig === 'string') {
+    try { elig = JSON.parse(elig); } catch(e) { elig = ['all']; }
+  }
+  const isAll = elig.includes('all');
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:500px;">
+        <div class="modal-header">
+          <div class="card-title">✏️ Edit Reward Item</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <form onsubmit="handleEditRewardSubmit(event, ${id})">
+          <div class="form-group">
+            <label>Reward Item Name <span style="color:var(--danger)">*</span></label>
+            <input type="text" id="edit-reward-name" required value="${currentName}">
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label>Points Required <span style="color:var(--danger)">*</span></label>
+              <input type="number" id="edit-reward-points" required min="1" value="${currentPoints}">
+            </div>
+            <div class="form-group">
+              <label>Stock Quantity <span style="color:var(--danger)">*</span></label>
+              <input type="number" id="edit-reward-stock" required min="0" value="${currentStock}">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Eligible Trade Categories</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+              <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1 / -1;border-bottom:1px solid var(--border);padding-bottom:6px;">
+                <input type="checkbox" id="edit-trade-all" value="all" ${isAll ? 'checked' : ''} onchange="handleEditTradeAllToggle(this)"> <b>🌟 All Trade Professionals</b>
+              </label>
+              ${TRADE_TYPES.map(t => `
+                <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                  <input type="checkbox" class="edit-trade-item-check" value="${t}" ${isAll || elig.includes(t) ? 'checked' : ''}> ${t}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="edit-reward-btn">Update Reward</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function handleEditTradeAllToggle(allCheck) {
+  const checks = document.querySelectorAll('.edit-trade-item-check');
+  checks.forEach(c => c.checked = allCheck.checked);
+}
+
+async function handleEditRewardSubmit(e, id) {
+  e.preventDefault();
+  const btn = document.getElementById('edit-reward-btn');
+  const name = document.getElementById('edit-reward-name').value.trim();
+  const pointsRequired = parseInt(document.getElementById('edit-reward-points').value, 10);
+  const stock = parseInt(document.getElementById('edit-reward-stock').value, 10);
+
+  const allTradesChecked = document.getElementById('edit-trade-all')?.checked;
+  const checks = document.querySelectorAll('.edit-trade-item-check:checked');
+  let eligibleTypes = [];
+  if (allTradesChecked || checks.length === TRADE_TYPES.length) {
+    eligibleTypes = ['all'];
+  } else {
+    eligibleTypes = Array.from(checks).map(c => c.value);
+    if (eligibleTypes.length === 0) eligibleTypes = ['all'];
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Updating...';
+
+  try {
+    await API.patch(`/api/rewards/${id}`, {
+      name,
+      pointsRequired,
+      stock,
+      eligibleTypes
+    });
+    showToast(`Reward "${name}" updated successfully!`, 'success');
+    closeModal();
+    renderRewardsView();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Update Reward';
+  }
+}
+
+async function deleteReward(rewardId, rewardName) {
+  if (!confirm(`Are you sure you want to delete "${rewardName}" from the rewards catalog?`)) return;
+  try {
+    await apiFetch(`/api/rewards/${rewardId}`, { method: 'DELETE' });
+    showToast(`Reward "${rewardName}" deleted`, 'success');
+    renderRewardsView();
+  } catch (err) {}
+}
+
+async function toggleRewardActive(rewardId) {
+  try {
+    const res = await API.patch(`/api/rewards/${rewardId}/toggle`, {});
+    showToast(`Reward ${res.is_active ? 'activated' : 'deactivated'}`, 'success');
+    renderRewardsView();
+  } catch (err) {}
 }
 
 async function handleRedeemRequest(rewardId, rewardName) {
