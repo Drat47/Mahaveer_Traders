@@ -1,0 +1,1749 @@
+/* =========================================================================
+   MECHANIC LOYALTY & AUDIT SYSTEM - CLIENT APPLICATION LOGIC (SPA)
+   ========================================================================= */
+
+const API = {
+  get: (url) => apiFetch(url, { method: 'GET' }),
+  post: (url, data) => apiFetch(url, { method: 'POST', body: JSON.stringify(data) }),
+  patch: (url, data) => apiFetch(url, { method: 'PATCH', body: JSON.stringify(data) })
+};
+
+let AppState = {
+  token: localStorage.getItem('mech_audit_token') || null,
+  user: null,
+  view: 'dash',
+  subViewId: null,
+  stats: {},
+  mechanics: [],
+  purchases: [],
+  products: [],
+  rewards: [],
+  redemptions: [],
+  returns: [],
+  auditLogs: [],
+  notifications: [],
+  networkInfo: null,
+  pollTimer: null,
+  selectedFilter: 'ALL',
+  searchQuery: ''
+};
+
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const btn = document.getElementById('pwa-install-banner-btn');
+  if (btn) btn.style.display = 'block';
+});
+
+async function triggerPwaInstall() {
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') {
+      showToast('App icon installed on your phone home screen!', 'success');
+      const btn = document.getElementById('pwa-install-banner-btn');
+      if (btn) btn.style.display = 'none';
+    }
+    deferredInstallPrompt = null;
+  } else {
+    // Instructions for iOS Safari or browsers without native prompt
+    alert('To install this app on your phone:\n1. Tap the browser Menu (or Share button on iPhone)\n2. Tap "Add to Home Screen" / "Install App"\n3. The app icon will appear on your phone screen!');
+  }
+}
+
+// Trade Types List
+const TRADE_TYPES = ['Plumber', 'Painters', 'Tiles Mistri', 'Carpenters', 'Raj Mistri', 'Others'];
+
+// Auth Fetch Helper
+async function apiFetch(endpoint, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
+  };
+  if (AppState.token) {
+    headers['Authorization'] = `Bearer ${AppState.token}`;
+  }
+
+  try {
+    const res = await fetch(endpoint, { ...options, headers });
+    if (res.status === 401) {
+      logout(false);
+      throw new Error('Session expired. Please log in again.');
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Server error');
+    }
+    return data;
+  } catch (err) {
+    showToast(err.message, 'error');
+    throw err;
+  }
+}
+
+// Toast Notification
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<span>${type === 'success' ? '✓' : type === 'error' ? '⚠' : 'ℹ'}</span> <span>${msg}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 3200);
+}
+
+// Format Currency
+function formatINR(val) {
+  return '₹' + Number(val || 0).toLocaleString('en-IN');
+}
+
+// Initialize App
+async function initApp() {
+  renderShell();
+  if (AppState.token) {
+    try {
+      const res = await API.get('/api/auth/me');
+      AppState.user = res.user;
+      startAutoSync();
+      navigate(AppState.user.role === 'auditor' ? 'audit_feed' : 'dash');
+    } catch (e) {
+      logout(false);
+    }
+  } else {
+    navigate('login');
+  }
+}
+
+// Start Background Auto-Sync every 8 seconds for multi-device synchronization
+function startAutoSync() {
+  if (AppState.pollTimer) clearInterval(AppState.pollTimer);
+  AppState.pollTimer = setInterval(async () => {
+    if (!AppState.user) return;
+    try {
+      if (AppState.user.role === 'admin' || AppState.user.role === 'auditor') {
+        const statsRes = await API.get('/api/dashboard/stats');
+        AppState.stats = statsRes;
+        if (AppState.view === 'dash') renderAdminDashboard();
+        if (AppState.view === 'audit_feed') loadAuditorFeedData();
+      }
+    } catch (e) {
+      // Background sync silently handles temporary glitches
+    }
+  }, 8000);
+}
+
+// Navigation Router
+function navigate(view, subId = null) {
+  AppState.view = view;
+  AppState.subViewId = subId;
+  renderView();
+}
+
+// Top-level HTML shell renderer
+function renderShell() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div id="toast-container"></div>
+    <div id="modal-root"></div>
+    <div class="app-container" id="app-container">
+      <div id="sidebar-slot"></div>
+      <main class="main-content" id="main-content"></main>
+      <nav class="bottom-nav" id="bottom-nav-slot"></nav>
+    </div>
+  `;
+}
+
+// Render the active view
+async function renderView() {
+  if (!AppState.user) {
+    renderLoginView();
+    return;
+  }
+
+  renderSidebar();
+  renderBottomNav();
+
+  const main = document.getElementById('main-content');
+  main.innerHTML = `<div style="text-align:center;padding:40px;"><p>Loading data...</p></div>`;
+
+  try {
+    switch (AppState.view) {
+      case 'dash':
+        if (AppState.user.role === 'admin') await renderAdminDashboard();
+        else if (AppState.user.role === 'auditor') await renderAuditorDashboard();
+        else await renderMechanicDashboard();
+        break;
+      case 'audit_feed':
+      case 'verifications':
+        await renderBillVerifications();
+        break;
+      case 'mechanics':
+        await renderMechanicsList();
+        break;
+      case 'mechanic_detail':
+        await renderMechanicDetail(AppState.subViewId);
+        break;
+      case 'purchases':
+        await renderPurchasesList();
+        break;
+      case 'submit_purchase':
+        await renderSubmitPurchase();
+        break;
+      case 'returns':
+        await renderReturnsView();
+        break;
+      case 'rewards':
+        await renderRewardsView();
+        break;
+      case 'redemptions':
+        await renderRedemptionsView();
+        break;
+      case 'audit_logs':
+        await renderAuditLogsView();
+        break;
+      case 'reports':
+        await renderReportsView();
+        break;
+      case 'settings':
+        await renderSettingsView();
+        break;
+      case 'notifications':
+        await renderNotificationsView();
+        break;
+      default:
+        navigate('dash');
+    }
+  } catch (err) {
+    console.error('Render error:', err);
+    main.innerHTML = `<div class="card"><p style="color:var(--danger)">Failed to load view: ${err.message}</p><button class="btn btn-primary" onclick="renderView()">Retry</button></div>`;
+  }
+}
+
+// Sidebar Navigation
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar-slot');
+  if (!AppState.user) {
+    sidebar.innerHTML = '';
+    return;
+  }
+
+  const role = AppState.user.role;
+  let navItems = [];
+
+  if (role === 'admin') {
+    navItems = [
+      { id: 'dash', label: '📊 Dashboard' },
+      { id: 'verifications', label: '🔍 Bill Audits', count: AppState.stats.pendingBills || 0 },
+      { id: 'mechanics', label: '👷 Mechanics' },
+      { id: 'purchases', label: '🧾 Purchases' },
+      { id: 'returns', label: '↩️ Returns & Reversals' },
+      { id: 'rewards', label: '🎁 Rewards Catalog' },
+      { id: 'redemptions', label: '🏆 Redemptions', count: AppState.stats.pendingRedemptions || 0 },
+      { id: 'reports', label: '📈 Reports & Rankings' },
+      { id: 'audit_logs', label: '📋 Audit Logs' },
+      { id: 'settings', label: '⚙️ Settings & Mobile Pairing' }
+    ];
+  } else if (role === 'auditor') {
+    navItems = [
+      { id: 'dash', label: '📊 Field Overview' },
+      { id: 'audit_feed', label: '🔍 Audit Queue', count: AppState.stats.pendingBills || 0 },
+      { id: 'submit_purchase', label: '📸 Snap & Log Bill' },
+      { id: 'mechanics', label: '👷 Mechanics Directory' },
+      { id: 'purchases', label: '🧾 Audited Purchases' },
+      { id: 'returns', label: '↩️ Returns & Reversals' },
+      { id: 'audit_logs', label: '📋 My Audit Logs' }
+    ];
+  } else {
+    navItems = [
+      { id: 'dash', label: '🏠 My Dashboard' },
+      { id: 'submit_purchase', label: '📸 Submit Purchase' },
+      { id: 'purchases', label: '🧾 My Purchases' },
+      { id: 'rewards', label: '🎁 Rewards & Redeem' },
+      { id: 'redemptions', label: '🏆 Redemption History' },
+      { id: 'notifications', label: '🔔 Notifications' }
+    ];
+  }
+
+  sidebar.innerHTML = `
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-title">🏪 Mahaveer Traders</div>
+        <span class="user-badge role-${role}">${role}</span>
+        <div style="font-size:12px;color:#cbd5e1;margin-top:4px;">${AppState.user.name}</div>
+      </div>
+      <nav class="nav-links">
+        ${navItems.map(item => `
+          <a class="nav-item ${AppState.view === item.id ? 'active' : ''}" onclick="navigate('${item.id}')">
+            <span>${item.label}</span>
+            ${item.count ? `<span class="badge-count">${item.count}</span>` : ''}
+          </a>
+        `).join('')}
+      </nav>
+      <div class="sidebar-footer">
+        <button class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:8px;" onclick="openMobilePairingModal()">📱 Connect Phones</button>
+        <button class="btn btn-danger btn-sm" style="width:100%" onclick="logout(true)">Logout</button>
+      </div>
+    </aside>
+  `;
+}
+
+// Mobile Bottom Navigation Bar
+function renderBottomNav() {
+  const bottomNav = document.getElementById('bottom-nav-slot');
+  if (!AppState.user) {
+    bottomNav.innerHTML = '';
+    return;
+  }
+
+  const role = AppState.user.role;
+  let items = [];
+
+  if (role === 'admin' || role === 'auditor') {
+    items = [
+      { id: 'dash', icon: '📊', label: 'Overview' },
+      { id: role === 'admin' ? 'verifications' : 'audit_feed', icon: '🔍', label: 'Audit Queue' },
+      { id: 'submit_purchase', icon: '📸', label: 'Snap Bill' },
+      { id: 'mechanics', icon: '👷', label: 'Mechanics' },
+      { id: 'audit_logs', icon: '📋', label: 'Logs' }
+    ];
+  } else {
+    items = [
+      { id: 'dash', icon: '🏠', label: 'Home' },
+      { id: 'submit_purchase', icon: '📸', label: 'Submit' },
+      { id: 'purchases', icon: '🧾', label: 'Purchases' },
+      { id: 'rewards', icon: '🎁', label: 'Rewards' }
+    ];
+  }
+
+  bottomNav.innerHTML = items.map(it => `
+    <a class="bottom-nav-item ${AppState.view === it.id ? 'active' : ''}" onclick="navigate('${it.id}')">
+      <span class="bottom-nav-icon">${it.icon}</span>
+      <span>${it.label}</span>
+    </a>
+  `).join('');
+}
+
+/* =========================================================================
+   AUTH & LOGIN VIEW
+   ========================================================================= */
+
+function renderLoginView() {
+  const main = document.getElementById('main-content');
+  document.getElementById('sidebar-slot').innerHTML = '';
+  document.getElementById('bottom-nav-slot').innerHTML = '';
+
+  main.innerHTML = `
+    <div style="max-width: 440px; margin: 4vh auto; padding: 12px;">
+      <div class="card" style="padding: 28px; box-shadow: var(--shadow-lg);">
+        <div style="text-align: center; margin-bottom: 24px;">
+          <div style="font-size: 40px; margin-bottom: 8px;">🏪</div>
+          <h2 style="font-size: 22px; font-weight: 700; color: var(--primary);">Mahaveer Traders</h2>
+          <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Mechanic Loyalty & Field Audit System</p>
+        </div>
+
+        <button type="button" class="btn btn-success" id="pwa-install-banner-btn" style="width:100%;margin-bottom:14px;" onclick="triggerPwaInstall()">📲 Install App on Phone (1-Tap)</button>
+
+        <form id="login-form" onsubmit="handleLoginSubmit(event)">
+          <div class="form-group">
+            <label>Username / User ID</label>
+            <input type="text" id="login-username" placeholder="e.g. admin, audit1, MEC1001" required autocomplete="username">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password">
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg" id="login-btn">Secure Login</button>
+        </form>
+
+        <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
+          <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase;">Quick Test Logins</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+            <button class="btn btn-secondary btn-sm" onclick="fillLogin('admin', 'admin123')">🔑 Admin</button>
+            <button class="btn btn-secondary btn-sm" onclick="fillLogin('audit1', 'audit123')">📱 Mobile Auditor 1</button>
+            <button class="btn btn-secondary btn-sm" onclick="fillLogin('audit2', 'audit123')">📱 Mobile Auditor 2</button>
+            <button class="btn btn-secondary btn-sm" onclick="fillLogin('MEC1001', 'mechanic123')">👷 Mechanic (Rajesh)</button>
+          </div>
+        </div>
+      </div>
+      <div style="text-align: center; margin-top: 12px;">
+        <button class="btn btn-secondary btn-sm" onclick="openMobilePairingModal()">📱 Connect Mobile Phones (QR Code)</button>
+      </div>
+    </div>
+  `;
+}
+
+function fillLogin(u, p) {
+  document.getElementById('login-username').value = u;
+  document.getElementById('login-password').value = p;
+  document.getElementById('login-form').dispatchEvent(new Event('submit'));
+}
+
+async function handleLoginSubmit(e) {
+  e.preventDefault();
+  const u = document.getElementById('login-username').value.trim();
+  const p = document.getElementById('login-password').value;
+  const btn = document.getElementById('login-btn');
+
+  btn.disabled = true;
+  btn.textContent = 'Authenticating...';
+
+  try {
+    const res = await API.post('/api/auth/login', { username: u, password: p });
+    AppState.token = res.token;
+    AppState.user = res.user;
+    localStorage.setItem('mech_audit_token', res.token);
+    showToast(`Welcome back, ${res.user.name}!`, 'success');
+    startAutoSync();
+    navigate(res.user.role === 'auditor' ? 'audit_feed' : 'dash');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Secure Login';
+  }
+}
+
+async function logout(callApi = true) {
+  if (callApi && AppState.token) {
+    try { await API.post('/api/auth/logout', {}); } catch (e) {}
+  }
+  AppState.token = null;
+  AppState.user = null;
+  localStorage.removeItem('mech_audit_token');
+  if (AppState.pollTimer) clearInterval(AppState.pollTimer);
+  navigate('login');
+  showToast('Logged out successfully', 'info');
+}
+
+/* =========================================================================
+   ADMIN DASHBOARD VIEW
+   ========================================================================= */
+
+async function renderAdminDashboard() {
+  const main = document.getElementById('main-content');
+  const stats = await API.get('/api/dashboard/stats');
+  AppState.stats = stats;
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">Operations & Audit Dashboard</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Live business metrics and field audit oversight</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary btn-sm" onclick="openMobilePairingModal()">📱 Mobile Pair (QR)</button>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('verifications')">🔍 Verify Bills (${stats.pendingBills})</button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card interactive" onclick="navigate('mechanics')">
+        <div class="stat-label">Total Mechanics</div>
+        <div class="stat-value">${stats.totalMechanics}</div>
+        <span style="font-size:11px;color:var(--success)">${stats.activeMechanics} Active in Field</span>
+      </div>
+
+      <div class="stat-card interactive highlight" onclick="navigate('verifications')">
+        <div class="stat-label">Pending Verification</div>
+        <div class="stat-value" style="color:var(--warning)">${stats.pendingBills}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Requires Auditor Action</span>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Approved Purchases</div>
+        <div class="stat-value" style="color:var(--success)">${stats.approvedBills}</div>
+        <span style="font-size:11px;color:var(--text-muted)">${formatINR(stats.purchaseValue)} Total Value</span>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Points Issued</div>
+        <div class="stat-value">${stats.pointsIssued.toLocaleString()}</div>
+        <span style="font-size:11px;color:var(--text-muted)">${stats.pointsRedeemed.toLocaleString()} Redeemed</span>
+      </div>
+
+      <div class="stat-card interactive" onclick="navigate('redemptions')">
+        <div class="stat-label">Pending Claims</div>
+        <div class="stat-value" style="color:${stats.pendingRedemptions > 0 ? 'var(--warning)' : 'var(--primary)'}">${stats.pendingRedemptions}</div>
+        <span style="font-size:11px;color:var(--text-muted)">Reward Redemptions</span>
+      </div>
+
+      <div class="stat-card interactive" onclick="navigate('returns')">
+        <div class="stat-label">Product Returns</div>
+        <div class="stat-value">${stats.returnsCount}</div>
+        <span style="font-size:11px;color:var(--danger)">${stats.pointsReversed} pts reversed</span>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Trade Category Revenue Breakdown</div>
+        </div>
+        <div style="position:relative;height:240px;">
+          <canvas id="trade-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Field Category Performance</div>
+          <button class="btn btn-secondary btn-sm" onclick="navigate('reports')">Full Report</button>
+        </div>
+        <div class="table-responsive">
+          <table>
+            <thead>
+              <tr>
+                <th>Trade Type</th>
+                <th>Mechanics</th>
+                <th>Approved Sales</th>
+                <th>Pending</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(stats.tradeBreakdown || []).map(t => `
+                <tr>
+                  <td><b>${t.type}</b></td>
+                  <td>${t.mechanics_count}</td>
+                  <td>${formatINR(t.approved_value)}</td>
+                  <td>${t.pending_bills > 0 ? `<span class="badge badge-pending">${t.pending_bills}</span>` : '0'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Render Chart.js
+  if (window.Chart && document.getElementById('trade-chart')) {
+    const ctx = document.getElementById('trade-chart').getContext('2d');
+    const labels = (stats.tradeBreakdown || []).map(t => t.type);
+    const data = (stats.tradeBreakdown || []).map(t => t.approved_value);
+
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Approved Sales (₹)',
+          data: data,
+          backgroundColor: '#2563EB',
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { callback: v => '₹' + v.toLocaleString() } }
+        }
+      }
+    });
+  }
+}
+
+/* =========================================================================
+   AUDITOR / FIELD AUDIT QUEUE VIEW (MOBILE-OPTIMIZED)
+   ========================================================================= */
+
+async function renderBillVerifications() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/purchases?status=PENDING');
+  const purchases = res.purchases || [];
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">🔍 Mobile Audit & Verification Queue</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Verify customer authenticity, bill receipt photos, and award points</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-secondary btn-sm" onclick="renderBillVerifications()">🔄 Refresh (${purchases.length})</button>
+        <button class="btn btn-primary btn-sm" onclick="navigate('submit_purchase')">📸 Snap New Bill</button>
+      </div>
+    </div>
+
+    ${purchases.length === 0 ? `
+      <div class="card" style="text-align:center;padding:48px 16px;">
+        <div style="font-size:48px;margin-bottom:8px;">✅</div>
+        <h3>All Caught Up!</h3>
+        <p style="color:var(--text-muted);margin-top:4px;">No pending bill submissions in the audit queue.</p>
+      </div>
+    ` : `
+      <div style="display:flex;flex-direction:column;gap:12px;">
+        ${purchases.map(p => `
+          <div class="audit-card">
+            <div class="audit-card-header">
+              <div>
+                <div class="audit-customer">Bill #${p.id} — ${p.customer_name}</div>
+                <div class="audit-meta">
+                  <b>Mechanic:</b> ${p.mechanic_name} (${p.trade_type} · ${p.mechanic_uid}) · <b>Phone:</b> ${p.mechanic_phone}
+                </div>
+                <div class="audit-meta">
+                  <b>Date:</b> ${p.purchase_date} · <b>Amount:</b> <span style="font-size:15px;font-weight:700;color:var(--primary);">${formatINR(p.total_amount)}</span>
+                </div>
+              </div>
+              <span class="badge badge-pending">Pending Verification</span>
+            </div>
+
+            <div style="background:#F8FAFC;padding:10px 12px;border-radius:var(--radius-sm);margin:8px 0;font-size:13px;">
+              <b>Address:</b> ${p.customer_address}<br>
+              <b>Items:</b> ${(p.items || []).map(i => `${i.product_name} (${i.quantity} ${i.unit})`).join(', ') || 'General purchase'}
+            </div>
+
+            <div class="audit-quick-actions">
+              <a href="tel:${p.customer_phone}" class="audit-btn-call">📞 Call Customer (${p.customer_phone})</a>
+              <a href="https://wa.me/91${p.customer_phone}?text=${encodeURIComponent(`Hello ${p.customer_name}, verifying your purchase of ${formatINR(p.total_amount)} on ${p.purchase_date}.`)}" target="_blank" class="audit-btn-whatsapp">💬 WhatsApp</a>
+              ${p.bill_file_url ? `<button class="btn btn-secondary btn-sm" onclick="openBillViewerModal('${p.bill_file_url}', ${p.id})">🖼️ View Bill Photo</button>` : `<span style="font-size:12px;color:var(--danger)">No Bill Photo Attached</span>`}
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border);flex-wrap:wrap;">
+              <button class="btn btn-success" onclick="openAuditActionModal(${p.id}, 'APPROVE', ${p.total_amount})">✓ Approve & Credit Points</button>
+              <button class="btn btn-danger btn-sm" onclick="openAuditActionModal(${p.id}, 'REJECT')">✕ Reject Bill</button>
+              <button class="btn btn-warning btn-sm" onclick="openAuditActionModal(${p.id}, 'CORRECTION')">⚠️ Request Correction</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `}
+  `;
+}
+
+// Modal: Bill Viewer with Zoom
+function openBillViewerModal(fileUrl, billId) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">Bill Receipt #${billId}</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="bill-preview-box">
+          ${fileUrl.toLowerCase().endsWith('.pdf') ? `
+            <a href="${fileUrl}" target="_blank" class="btn btn-primary">📄 Open Full PDF Document</a>
+          ` : `
+            <img src="${fileUrl}" class="bill-img" id="modal-bill-img" alt="Bill Photo">
+          `}
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:12px;">
+          <a href="${fileUrl}" target="_blank" class="btn btn-secondary btn-sm">Open in New Tab</a>
+          <button class="btn btn-primary btn-sm" onclick="closeModal()">Close</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Modal: Audit Action (Approve with Points / Reject / Correction)
+function openAuditActionModal(purchaseId, action, totalAmount = 0) {
+  const modalRoot = document.getElementById('modal-root');
+  const defaultPoints = Math.round((totalAmount * 3) / 100); // Default 3 pts per ₹100
+
+  let bodyHtml = '';
+  if (action === 'APPROVE') {
+    bodyHtml = `
+      <div class="form-group">
+        <label>Points to Award (Calculated from ₹${totalAmount.toLocaleString('en-IN')})</label>
+        <input type="number" id="audit-points" value="${defaultPoints}" min="0">
+        <small style="color:var(--text-muted)">Standard rate: 3 points per ₹100 spent</small>
+      </div>
+      <div style="background:#DCFCE7;padding:10px;border-radius:var(--radius-sm);font-size:12px;color:#166534;margin-bottom:12px;">
+        ✓ Customer purchase verified<br>
+        ✓ Points will be credited directly to the mechanic's active ledger
+      </div>
+    `;
+  } else if (action === 'REJECT') {
+    bodyHtml = `
+      <div class="form-group">
+        <label>Rejection Reason (Required for Audit Trail)</label>
+        <select id="audit-reason-select" onchange="document.getElementById('audit-reason-custom').style.display = this.value === 'Other' ? 'block' : 'none'">
+          <option>Bill receipt unreadable / blurry photo</option>
+          <option>Customer denied making this purchase</option>
+          <option>Duplicate bill already processed</option>
+          <option>Invalid / non-registered store bill</option>
+          <option>Wrong product category billed</option>
+          <option>Other</option>
+        </select>
+        <input type="text" id="audit-reason-custom" placeholder="Specify custom reason..." style="display:none;margin-top:6px;">
+      </div>
+    `;
+  } else if (action === 'CORRECTION') {
+    bodyHtml = `
+      <div class="form-group">
+        <label>Correction Message for Mechanic</label>
+        <textarea id="audit-correction-msg" rows="3" placeholder="e.g. Please re-upload a clearer photo showing the customer phone number and date..."></textarea>
+      </div>
+    `;
+  }
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">${action === 'APPROVE' ? 'Approve Bill & Issue Points' : action === 'REJECT' ? 'Reject Bill Submission' : 'Request Correction'}</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        ${bodyHtml}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn ${action === 'APPROVE' ? 'btn-success' : action === 'REJECT' ? 'btn-danger' : 'btn-warning'}" onclick="submitAuditAction(${purchaseId}, '${action}')">Confirm ${action}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function submitAuditAction(purchaseId, action) {
+  try {
+    let payload = { action };
+    if (action === 'APPROVE') {
+      const pts = parseInt(document.getElementById('audit-points').value, 10);
+      if (isNaN(pts) || pts < 0) return showToast('Enter a valid points number', 'error');
+      payload.points = pts;
+    } else if (action === 'REJECT') {
+      const sel = document.getElementById('audit-reason-select').value;
+      const custom = document.getElementById('audit-reason-custom').value.trim();
+      payload.reason = sel === 'Other' ? custom : sel;
+      if (!payload.reason) return showToast('Rejection reason is required', 'error');
+    } else if (action === 'CORRECTION') {
+      const msg = document.getElementById('audit-correction-msg').value.trim();
+      if (!msg) return showToast('Correction message is required', 'error');
+      payload.message = msg;
+    }
+
+    await API.post(`/api/purchases/${purchaseId}/verify`, payload);
+    showToast(`Audit decision recorded: ${action}`, 'success');
+    closeModal();
+    renderBillVerifications();
+  } catch (err) {
+    // Handled by apiFetch
+  }
+}
+
+function closeModal() {
+  const modalRoot = document.getElementById('modal-root');
+  if (modalRoot) modalRoot.innerHTML = '';
+}
+
+/* =========================================================================
+   SUBMIT PURCHASE / SNAP BILL (MOBILE CAMERA COMPATIBLE)
+   ========================================================================= */
+
+async function renderSubmitPurchase() {
+  const main = document.getElementById('main-content');
+  const prodsRes = await API.get('/api/products');
+  const mechsRes = await API.get('/api/mechanics');
+  const products = prodsRes.products || [];
+  const mechanics = mechsRes.mechanics || [];
+
+  const isAuditorOrAdmin = AppState.user.role === 'admin' || AppState.user.role === 'auditor';
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">📸 Submit Purchase & Bill</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Upload bill photo and record customer purchase details</p>
+      </div>
+    </div>
+
+    <div style="max-width: 680px; margin: 0 auto;">
+      <form id="purchase-form" onsubmit="handlePurchaseSubmit(event)">
+        ${isAuditorOrAdmin ? `
+          <div class="card">
+            <div class="card-title" style="margin-bottom:12px;">👷 Select Mechanic</div>
+            <div class="form-group">
+              <label>Mechanic Account</label>
+              <select id="pur-mechanic-id" required>
+                <option value="">-- Choose Mechanic --</option>
+                ${mechanics.filter(m => m.is_active).map(m => `
+                  <option value="${m.id}">${m.name} (${m.uid} · ${m.trade_type} · ${m.phone})</option>
+                `).join('')}
+              </select>
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">👤 Customer & Date</div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Purchase Date</label>
+              <input type="date" id="pur-date" value="${new Date().toISOString().slice(0, 10)}" required>
+            </div>
+            <div class="form-group">
+              <label>Customer Name</label>
+              <input type="text" id="pur-cust-name" placeholder="Full name of customer" required>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Customer Phone Number</label>
+              <input type="tel" id="pur-cust-phone" placeholder="10-digit mobile number" required pattern="[0-9]{10}">
+            </div>
+            <div class="form-group">
+              <label>Customer Address</label>
+              <input type="text" id="pur-cust-addr" placeholder="Location, Street, City" required>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">📦 Products Purchased</div>
+          <div id="items-container">
+            <!-- Dynamic item rows -->
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="addPurchaseItemRow()">+ Add Product Line</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px;">💰 Amount & Bill Photo</div>
+          <div class="form-group">
+            <label>Total Bill Amount Paid (₹)</label>
+            <input type="number" id="pur-amount" placeholder="e.g. 4500" min="1" step="any" required>
+          </div>
+
+          <div class="form-group">
+            <label>Bill Photo / Receipt (Camera Capture or File)</label>
+            <input type="file" id="pur-file" accept="image/*,.pdf" capture="environment" onchange="handleBillFileSelected(this)">
+            <small style="color:var(--text-muted)">Take a clear, well-lit photo of the full bill.</small>
+            <div id="file-preview-slot" style="margin-top:10px;"></div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-lg" id="pur-submit-btn">Submit Purchase for Audit Verification</button>
+      </form>
+    </div>
+  `;
+
+  // Store products for dynamic rows
+  window._availableProducts = products;
+  addPurchaseItemRow();
+}
+
+let uploadedBillUrl = '';
+
+function addPurchaseItemRow() {
+  const container = document.getElementById('items-container');
+  if (!container) return;
+  const rowId = 'row_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+
+  const div = document.createElement('div');
+  div.id = rowId;
+  div.className = 'form-row';
+  div.style.marginBottom = '8px';
+  div.innerHTML = `
+    <div style="flex:2;">
+      <select class="item-prod-select" onchange="handleProductSelected(this, '${rowId}')" required>
+        <option value="">Select product...</option>
+        ${(window._availableProducts || []).map(p => `
+          <option value="${p.id}" data-unit="${p.unit}" data-name="${p.name}">${p.name} (${p.category})</option>
+        `).join('')}
+      </select>
+    </div>
+    <div style="flex:1;">
+      <input type="number" class="item-qty" placeholder="Quantity" min="0.1" step="any" required>
+    </div>
+    <div style="flex:0.8;">
+      <input type="text" class="item-unit" placeholder="Unit" readonly style="background:#F1F5F9;">
+    </div>
+    <div style="flex:0;">
+      <button type="button" class="btn btn-danger btn-sm" onclick="document.getElementById('${rowId}').remove()">✕</button>
+    </div>
+  `;
+  container.appendChild(div);
+}
+
+function handleProductSelected(selectEl, rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const opt = selectEl.options[selectEl.selectedIndex];
+  const unitInput = row.querySelector('.item-unit');
+  unitInput.value = opt.getAttribute('data-unit') || 'Piece';
+}
+
+function handleBillFileSelected(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const slot = document.getElementById('file-preview-slot');
+  slot.innerHTML = `<p style="font-size:12px;color:var(--text-muted)">Processing and compressing photo...</p>`;
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    try {
+      const res = await API.post('/api/upload', { dataUrl, filename: file.name });
+      uploadedBillUrl = res.fileUrl;
+      slot.innerHTML = `
+        <div style="background:#F1F5F9;padding:8px;border-radius:var(--radius-sm);display:flex;align-items:center;gap:10px;">
+          ${file.type.startsWith('image') ? `<img src="${uploadedBillUrl}" style="height:60px;width:60px;object-fit:cover;border-radius:4px;">` : '📄'}
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--success)">✓ Photo uploaded securely</div>
+            <div style="font-size:11px;color:var(--text-muted)">${file.name} (${Math.round(file.size / 1024)} KB)</div>
+          </div>
+        </div>
+      `;
+      showToast('Bill photo uploaded ready', 'success');
+    } catch (err) {
+      slot.innerHTML = `<p style="color:var(--danger)">Upload failed: ${err.message}</p>`;
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+async function handlePurchaseSubmit(e) {
+  e.preventDefault();
+  const btn = document.getElementById('pur-submit-btn');
+
+  const mechSelect = document.getElementById('pur-mechanic-id');
+  const mechanicId = mechSelect ? mechSelect.value : null;
+
+  const purchaseDate = document.getElementById('pur-date').value;
+  const customerName = document.getElementById('pur-cust-name').value.trim();
+  const customerPhone = document.getElementById('pur-cust-phone').value.trim();
+  const customerAddress = document.getElementById('pur-cust-addr').value.trim();
+  const totalAmount = parseFloat(document.getElementById('pur-amount').value);
+
+  // Collect item rows
+  const itemRows = document.querySelectorAll('#items-container .form-row');
+  const items = [];
+  itemRows.forEach(row => {
+    const sel = row.querySelector('.item-prod-select');
+    const qty = parseFloat(row.querySelector('.item-qty').value);
+    const unit = row.querySelector('.item-unit').value;
+    if (sel && sel.value && qty > 0) {
+      const opt = sel.options[sel.selectedIndex];
+      items.push({
+        productId: parseInt(sel.value, 10),
+        productName: opt.getAttribute('data-name'),
+        quantity: qty,
+        unit: unit
+      });
+    }
+  });
+
+  if (items.length === 0) {
+    return showToast('Add at least one product with valid quantity', 'error');
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+
+  try {
+    const payload = {
+      mechanicId,
+      purchaseDate,
+      customerName,
+      customerPhone,
+      customerAddress,
+      totalAmount,
+      billFileUrl: uploadedBillUrl,
+      items
+    };
+
+    const res = await API.post('/api/purchases', payload);
+    showToast('Purchase submitted for audit verification!', 'success');
+    uploadedBillUrl = '';
+    navigate(AppState.user.role === 'mechanic' ? 'purchases' : 'verifications');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Submit Purchase for Audit Verification';
+  }
+}
+
+/* =========================================================================
+   MECHANICS DIRECTORY & PROFILE VIEW
+   ========================================================================= */
+
+async function renderMechanicsList() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/mechanics');
+  const mechanics = res.mechanics || [];
+  const isAdmin = AppState.user.role === 'admin';
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">👷 Mechanics Directory</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Manage accounts, points balance, and field profiles</p>
+      </div>
+      <div class="top-actions">
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openAddMechanicModal()">+ Register Mechanic</button>` : ''}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div class="form-row">
+        <input type="text" id="mech-search" placeholder="Search by name, phone, user ID, or address..." oninput="filterMechanicsTable(this.value)">
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <div class="table-responsive">
+        <table id="mechanics-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Trade</th>
+              <th>Phone</th>
+              <th>Available Points</th>
+              <th>Lifetime Points</th>
+              <th>Pending Bills</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${mechanics.map(m => `
+              <tr data-search="${(m.name + m.phone + m.uid + m.trade_type + m.address).toLowerCase()}">
+                <td><b>${m.uid}</b></td>
+                <td><b>${m.name}</b><br><small style="color:var(--text-muted)">${m.address}</small></td>
+                <td><span class="badge" style="background:#E2E8F0;">${m.trade_type}</span></td>
+                <td>${m.phone}</td>
+                <td><b style="color:var(--primary);font-size:15px;">${m.available_points}</b>${m.recovery_points > 0 ? `<br><small style="color:var(--danger)">Recovery: ${m.recovery_points}</small>` : ''}</td>
+                <td>${m.lifetime_points}</td>
+                <td>${m.pending_bills_count > 0 ? `<span class="badge badge-pending">${m.pending_bills_count}</span>` : '0'}</td>
+                <td><span class="badge ${m.is_active ? 'badge-active' : 'badge-inactive'}">${m.is_active ? 'Active' : 'Inactive'}</span></td>
+                <td>
+                  <button class="btn btn-secondary btn-sm" onclick="navigate('mechanic_detail', ${m.id})">Profile</button>
+                  ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="toggleMechanicStatus(${m.id})">${m.is_active ? 'Deactivate' : 'Activate'}</button>` : ''}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function filterMechanicsTable(query) {
+  const q = query.toLowerCase().trim();
+  const rows = document.querySelectorAll('#mechanics-table tbody tr');
+  rows.forEach(r => {
+    const text = r.getAttribute('data-search') || '';
+    r.style.display = text.includes(q) ? '' : 'none';
+  });
+}
+
+// Modal: Add Mechanic
+function openAddMechanicModal() {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">Register New Mechanic</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <form onsubmit="handleAddMechanicSubmit(event)">
+          <div class="form-group">
+            <label>Full Name</label>
+            <input type="text" id="new-m-name" required placeholder="e.g. Rajesh Kumar">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Phone Number</label>
+              <input type="tel" id="new-m-phone" required pattern="[0-9]{10}" placeholder="10-digit mobile number">
+            </div>
+            <div class="form-group">
+              <label>Trade / Specialty</label>
+              <select id="new-m-type" required>
+                ${TRADE_TYPES.map(t => `<option>${t}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Address / Shop Location</label>
+            <input type="text" id="new-m-addr" required placeholder="e.g. Gandhi Maidan, Patna">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Login User ID</label>
+              <input type="text" id="new-m-uid" required placeholder="e.g. MEC1007">
+            </div>
+            <div class="form-group">
+              <label>Password</label>
+              <input type="password" id="new-m-pw" required value="mechanic123">
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save & Register</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+async function handleAddMechanicSubmit(e) {
+  e.preventDefault();
+  const payload = {
+    name: document.getElementById('new-m-name').value.trim(),
+    phone: document.getElementById('new-m-phone').value.trim(),
+    trade_type: document.getElementById('new-m-type').value,
+    address: document.getElementById('new-m-addr').value.trim(),
+    uid: document.getElementById('new-m-uid').value.trim(),
+    password: document.getElementById('new-m-pw').value
+  };
+
+  try {
+    await API.post('/api/mechanics', payload);
+    showToast('Mechanic registered successfully', 'success');
+    closeModal();
+    renderMechanicsList();
+  } catch (err) {}
+}
+
+async function toggleMechanicStatus(id) {
+  try {
+    await API.patch(`/api/mechanics/${id}/status`, {});
+    showToast('Status updated', 'success');
+    renderMechanicsList();
+  } catch (e) {}
+}
+
+/* =========================================================================
+   MECHANIC DETAIL & POINTS LEDGER VIEW
+   ========================================================================= */
+
+async function renderMechanicDetail(mechanicId) {
+  const main = document.getElementById('main-content');
+  const res = await API.get(`/api/mechanics/${mechanicId}`);
+  const m = res.mechanic;
+  const ledger = res.ledger || [];
+  const purchases = res.purchases || [];
+  const isAdmin = AppState.user.role === 'admin';
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <button class="btn btn-secondary btn-sm" onclick="navigate('mechanics')">← Back to Mechanics</button>
+        <h1 class="page-title" style="margin-top:8px;">${m.name} (${m.uid})</h1>
+        <p style="font-size:13px;color:var(--text-muted)">${m.trade_type} · ${m.phone} · ${m.address}</p>
+      </div>
+      <div class="top-actions">
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openAdjustPointsModal(${m.id}, '${m.name}')">± Adjust Points</button>` : ''}
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Available Points</div>
+        <div class="stat-value" style="color:var(--primary);">${m.available_points}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Lifetime Earned</div>
+        <div class="stat-value" style="color:var(--success);">${m.lifetime_points}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Recovery Pending</div>
+        <div class="stat-value" style="color:${m.recovery_points > 0 ? 'var(--danger)' : 'var(--text-muted)'};">${m.recovery_points}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Purchases</div>
+        <div class="stat-value">${purchases.length}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px;">📜 Points Transaction Ledger</div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Type</th>
+              <th>Description</th>
+              <th>Points</th>
+              <th>Balance After</th>
+              <th>Auditor / Actor</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${ledger.length === 0 ? `<tr><td colspan="6">No transaction records found.</td></tr>` : ledger.map(t => `
+              <tr>
+                <td>${t.created_at}</td>
+                <td><span class="badge" style="background:#E2E8F0;">${t.type}</span></td>
+                <td>${t.description}${t.reason ? `<br><small style="color:var(--text-muted)">Reason: ${t.reason}</small>` : ''}</td>
+                <td><b style="color:${t.points >= 0 ? 'var(--success)' : 'var(--danger)'};">${t.points > 0 ? '+' : ''}${t.points}</b></td>
+                <td><b>${t.balance_after}</b></td>
+                <td>${t.created_by}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// Modal: Manual Point Adjustment
+function openAdjustPointsModal(mechId, mechName) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">Adjust Points: ${mechName}</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <form onsubmit="handleAdjustPointsSubmit(event, ${mechId})">
+          <div class="form-group">
+            <label>Points to Add or Deduct</label>
+            <input type="number" id="adj-points" required placeholder="e.g. +100 or -50">
+            <small style="color:var(--text-muted)">Enter positive number to credit, negative to deduct.</small>
+          </div>
+          <div class="form-group">
+            <label>Adjustment Reason</label>
+            <select id="adj-reason">
+              <option>Promotional Bonus</option>
+              <option>Correction for Audit Discrepancy</option>
+              <option>Customer Service Adjustment</option>
+              <option>System Error Resolution</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Apply Adjustment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+async function handleAdjustPointsSubmit(e, mechId) {
+  e.preventDefault();
+  const pts = parseInt(document.getElementById('adj-points').value, 10);
+  const reason = document.getElementById('adj-reason').value;
+
+  try {
+    await API.post(`/api/mechanics/${mechId}/adjust-points`, { points: pts, reason });
+    showToast('Points adjusted successfully', 'success');
+    closeModal();
+    renderMechanicDetail(mechId);
+  } catch (err) {}
+}
+
+/* =========================================================================
+   PURCHASES AUDIT & LIST VIEW
+   ========================================================================= */
+
+async function renderPurchasesList() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/purchases');
+  const purchases = res.purchases || [];
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">🧾 Purchases & Bill Records</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Historical bills, verified status, and reward allocation</p>
+      </div>
+      <div class="top-actions">
+        <a href="/api/reports/export-purchases-csv" download class="btn btn-secondary btn-sm">📊 Export CSV</a>
+        <button class="btn btn-primary btn-sm" onclick="navigate('submit_purchase')">+ Submit New Bill</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Date</th>
+              <th>Mechanic</th>
+              <th>Customer</th>
+              <th>Items</th>
+              <th>Amount</th>
+              <th>Status</th>
+              <th>Points</th>
+              <th>Bill</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${purchases.length === 0 ? `<tr><td colspan="9">No purchase records found.</td></tr>` : purchases.map(p => `
+              <tr>
+                <td><b>#${p.id}</b></td>
+                <td>${p.purchase_date}</td>
+                <td><b>${p.mechanic_name}</b><br><small style="color:var(--text-muted)">${p.trade_type}</small></td>
+                <td>${p.customer_name}<br><small style="color:var(--text-muted)">${p.customer_phone}</small></td>
+                <td>${(p.items || []).map(i => `${i.product_name} (${i.quantity} ${i.unit})`).join('<br>') || '-'}</td>
+                <td><b>${formatINR(p.total_amount)}</b></td>
+                <td><span class="badge badge-${p.status.toLowerCase()}">${p.status}</span></td>
+                <td><b>${p.points_awarded !== null ? p.points_awarded : '-'}</b></td>
+                <td>
+                  ${p.bill_file_url ? `<button class="btn btn-secondary btn-sm" onclick="openBillViewerModal('${p.bill_file_url}', ${p.id})">View</button>` : '-'}
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================================
+   RETURNS & REVERSALS VIEW
+   ========================================================================= */
+
+async function renderReturnsView() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/returns');
+  const returns = res.returns || [];
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">↩️ Product Returns & Reversals</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Manage customer item returns and proportional point reversals</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px;">Processed Product Returns</div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Mechanic</th>
+              <th>Customer</th>
+              <th>Returned Items</th>
+              <th>Points Reversed</th>
+              <th>Recovery Balance</th>
+              <th>Reason</th>
+              <th>Auditor</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${returns.length === 0 ? `<tr><td colspan="8">No product returns recorded.</td></tr>` : returns.map(r => `
+              <tr>
+                <td>${r.return_date}</td>
+                <td><b>${r.mechanic_name}</b></td>
+                <td>${r.customer_name}</td>
+                <td>${r.items_summary}</td>
+                <td><b style="color:var(--danger)">-${r.points_reversed}</b></td>
+                <td>${r.points_under_recovery > 0 ? `<b style="color:var(--danger)">${r.points_under_recovery} pts</b>` : 'None'}</td>
+                <td>${r.reason}</td>
+                <td>${r.processed_by}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================================
+   REWARDS & REDEMPTIONS VIEW
+   ========================================================================= */
+
+async function renderRewardsView() {
+  const main = document.getElementById('main-content');
+  const rewRes = await API.get('/api/rewards');
+  const rewards = rewRes.rewards || [];
+  const isMechanic = AppState.user.role === 'mechanic';
+  const isAdmin = AppState.user.role === 'admin';
+
+  let mechPoints = 0;
+  if (isMechanic && AppState.user.mechanic) {
+    mechPoints = AppState.user.mechanic.available_points || 0;
+  }
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">🎁 Rewards Catalog</h1>
+        <p style="font-size:13px;color:var(--text-muted)">
+          ${isMechanic ? `Your Available Points: <b style="color:var(--primary);font-size:16px;">${mechPoints} pts</b>` : 'Manage reward items and trade eligibility'}
+        </p>
+      </div>
+      <div class="top-actions">
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openAddRewardModal()">+ Add Reward Item</button>` : ''}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;">
+      ${rewards.map(r => {
+        const isEligible = isMechanic ? (mechPoints >= r.points_required && r.stock > 0) : true;
+        return `
+          <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;">
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <h3 style="font-size:16px;font-weight:700;color:var(--primary);">${r.name}</h3>
+                <span class="badge ${r.stock > 0 ? 'badge-active' : 'badge-inactive'}">${r.stock > 0 ? `${r.stock} in stock` : 'Out of Stock'}</span>
+              </div>
+              <div style="margin:12px 0;">
+                <span style="font-size:20px;font-weight:700;color:var(--accent);">${r.points_required} Points</span>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted);">
+                <b>Eligible:</b> ${(r.eligible_types || []).join(', ')}
+              </div>
+            </div>
+
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+              ${isMechanic ? `
+                <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name}')">
+                  ${r.stock < 1 ? 'Out of Stock' : mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
+                </button>
+              ` : `
+                <button class="btn btn-secondary btn-sm" onclick="toggleRewardActive(${r.id})">${r.is_active ? 'Deactivate' : 'Activate'}</button>
+              `}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+async function handleRedeemRequest(rewardId, rewardName) {
+  if (!confirm(`Are you sure you want to claim "${rewardName}"? Points will be reserved immediately.`)) return;
+  try {
+    await API.post('/api/redemptions', { rewardId });
+    showToast('Reward redemption requested!', 'success');
+    navigate('redemptions');
+  } catch (e) {}
+}
+
+/* =========================================================================
+   AUDIT LOGS VIEW & CSV EXPORT
+   ========================================================================= */
+
+async function renderAuditLogsView() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/audit-logs');
+  const logs = res.logs || [];
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">📋 Comprehensive Audit Trail</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Immutable log of all approvals, rejections, points adjustments, and logins</p>
+      </div>
+      <div class="top-actions">
+        <a href="/api/audit-logs/export-csv" download class="btn btn-secondary btn-sm">📊 Download Audit CSV</a>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Timestamp</th>
+              <th>Actor</th>
+              <th>Role</th>
+              <th>Action</th>
+              <th>Details</th>
+              <th>Client IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${logs.length === 0 ? `<tr><td colspan="7">No audit logs recorded.</td></tr>` : logs.map(l => `
+              <tr>
+                <td>#${l.id}</td>
+                <td>${l.timestamp}</td>
+                <td><b>${l.actor_name}</b></td>
+                <td><span class="user-badge role-${l.actor_role}">${l.actor_role}</span></td>
+                <td><b>${l.action}</b></td>
+                <td>${l.details}</td>
+                <td><small style="color:var(--text-muted)">${l.ip_address}</small></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+/* =========================================================================
+   MOBILE PAIRING MODAL (QR CODE GENERATOR FOR 5-6 PHONES)
+   ========================================================================= */
+
+async function openMobilePairingModal() {
+  const modalRoot = document.getElementById('modal-root');
+  let net = AppState.networkInfo;
+  try {
+    net = await API.get('/api/system/network-info');
+    AppState.networkInfo = net;
+  } catch (e) {
+    net = { primaryUrl: window.location.origin, mobileUrls: [window.location.origin] };
+  }
+
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(net.primaryUrl)}`;
+
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" style="max-width:480px;text-align:center;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">📱 Connect Mobile Phones</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+          Make sure your phone is connected to the <b>same Wi-Fi</b> network as this PC, then scan this QR code with the phone camera:
+        </p>
+
+        <div style="background:#fff;padding:14px;border:1px solid var(--border);border-radius:var(--radius-md);display:inline-block;margin-bottom:12px;">
+          <img src="${qrUrl}" alt="Wi-Fi QR Code" style="width:200px;height:200px;display:block;">
+        </div>
+
+        <div class="qr-ip-box">
+          👉 <b>${net.primaryUrl}</b>
+        </div>
+
+        <div style="font-size:12px;color:var(--text-muted);text-align:left;background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);">
+          <b>How to use on 5–6 phones:</b><br>
+          1. Open camera on each mobile phone and scan the QR above.<br>
+          2. Log in with Auditor accounts (<code>audit1 / audit123</code> or <code>audit2 / audit123</code>).<br>
+          3. Tap "Add to Home Screen" in mobile browser to use as a full-screen app!
+        </div>
+
+        <div style="margin-top:16px;">
+          <button class="btn btn-primary" style="width:100%;" onclick="closeModal()">Done</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Fallback views for redemptions, settings, reports, mechanic dash
+async function renderRedemptionsView() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/redemptions');
+  const list = res.redemptions || [];
+  const isAdmin = AppState.user.role === 'admin';
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">🏆 Reward Redemptions</h1>
+        <p style="font-size:13px;color:var(--text-muted)">Claims submitted by mechanics for rewards</p>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;">
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Mechanic</th>
+              <th>Reward</th>
+              <th>Points</th>
+              <th>Status</th>
+              ${isAdmin ? '<th>Action</th>' : ''}
+            </tr>
+          </thead>
+          <tbody>
+            ${list.length === 0 ? `<tr><td colspan="6">No redemptions requested.</td></tr>` : list.map(r => `
+              <tr>
+                <td>${r.requested_at}</td>
+                <td><b>${r.mechanic_name}</b> (${r.trade_type})</td>
+                <td>${r.reward_name}</td>
+                <td><b>${r.points}</b></td>
+                <td><span class="badge badge-${r.status.toLowerCase()}">${r.status}</span></td>
+                ${isAdmin ? `
+                  <td>
+                    ${r.status === 'Pending' ? `
+                      <button class="btn btn-success btn-sm" onclick="decideRedemption(${r.id}, true)">Approve</button>
+                      <button class="btn btn-danger btn-sm" onclick="decideRedemption(${r.id}, false)">Reject</button>
+                    ` : `Decided by ${r.decided_by || 'Admin'}`}
+                  </td>
+                ` : ''}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+async function decideRedemption(id, approve) {
+  try {
+    await API.post(`/api/redemptions/${id}/decide`, { approve });
+    showToast(`Redemption ${approve ? 'approved' : 'rejected'}`, 'success');
+    renderRedemptionsView();
+  } catch (e) {}
+}
+
+async function renderMechanicDashboard() {
+  const main = document.getElementById('main-content');
+  const meRes = await API.get('/api/auth/me');
+  const m = meRes.user.mechanic || {};
+  const purRes = await API.get('/api/purchases');
+  const purchases = purRes.purchases || [];
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">Welcome, ${AppState.user.name}</h1>
+        <p style="font-size:13px;color:var(--text-muted)">${m.trade_type || 'Mechanic'} · User ID: ${m.uid || AppState.user.username}</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn btn-primary btn-sm" onclick="navigate('submit_purchase')">📸 Submit Purchase</button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Available Points</div>
+        <div class="stat-value" style="color:var(--accent);">${m.available_points || 0}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Lifetime Points</div>
+        <div class="stat-value" style="color:var(--success);">${m.lifetime_points || 0}</div>
+      </div>
+      ${m.recovery_points > 0 ? `
+        <div class="stat-card">
+          <div class="stat-label">Recovery Pending</div>
+          <div class="stat-value" style="color:var(--danger);">${m.recovery_points}</div>
+        </div>
+      ` : ''}
+      <div class="stat-card">
+        <div class="stat-label">Approved Purchases</div>
+        <div class="stat-value">${purchases.filter(p => p.status === 'APPROVED').length}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px;">Recent Purchases</div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Customer</th>
+              <th>Items</th>
+              <th>Amount</th>
+              <th>Status</th>
+              <th>Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${purchases.slice(0, 5).map(p => `
+              <tr>
+                <td>${p.purchase_date}</td>
+                <td>${p.customer_name}</td>
+                <td>${(p.items || []).map(i => `${i.product_name} (${i.quantity} ${i.unit})`).join(', ')}</td>
+                <td><b>${formatINR(p.total_amount)}</b></td>
+                <td><span class="badge badge-${p.status.toLowerCase()}">${p.status}</span></td>
+                <td><b>${p.points_awarded || '-'}</b></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+async function renderNotificationsView() {
+  const main = document.getElementById('main-content');
+  const res = await API.get('/api/notifications');
+  const notifs = res.notifications || [];
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <h1 class="page-title">🔔 Notifications</h1>
+    </div>
+    <div class="card">
+      ${notifs.length === 0 ? '<p>No new notifications.</p>' : notifs.map(n => `
+        <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+          <div style="font-size:13px;">${n.message}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${n.created_at}</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function renderReportsView() {
+  const main = document.getElementById('main-content');
+  const stats = await API.get('/api/dashboard/stats');
+  const mechs = (await API.get('/api/mechanics')).mechanics || [];
+
+  const leaderboard = [...mechs].sort((a, b) => b.lifetime_points - a.lifetime_points);
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <div>
+        <h1 class="page-title">📈 Reports & Performance</h1>
+      </div>
+      <div class="top-actions">
+        <a href="/api/reports/export-purchases-csv" download class="btn btn-secondary btn-sm">📊 Export All Purchases CSV</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px;">🏆 Top Mechanics Leaderboard</div>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Mechanic Name</th>
+              <th>Trade</th>
+              <th>Available Points</th>
+              <th>Lifetime Points</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${leaderboard.map((m, i) => `
+              <tr>
+                <td><b>#${i + 1}</b></td>
+                <td><b>${m.name}</b> (${m.uid})</td>
+                <td>${m.trade_type}</td>
+                <td>${m.available_points}</td>
+                <td><b style="color:var(--success);">${m.lifetime_points}</b></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+async function renderSettingsView() {
+  const main = document.getElementById('main-content');
+  const net = await API.get('/api/system/network-info');
+
+  main.innerHTML = `
+    <div class="top-bar">
+      <h1 class="page-title">⚙️ Settings & Mobile Setup</h1>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px;">📱 Multi-Device Wi-Fi Connectivity</div>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+        Connect up to 5–6 mobile phones on your local Wi-Fi network for simultaneous field auditing and bill submission.
+      </p>
+      <div class="qr-ip-box">
+        Primary LAN Address: <b>${net.primaryUrl}</b>
+      </div>
+      <button class="btn btn-primary" onclick="openMobilePairingModal()">Display Fullscreen QR Code</button>
+    </div>
+  `;
+}
+
+// Global initialization
+window.addEventListener('DOMContentLoaded', initApp);
