@@ -358,28 +358,12 @@ function renderLoginView() {
           </div>
           <button type="submit" class="btn btn-primary btn-lg" id="login-btn">Secure Login</button>
         </form>
-
-        <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);">
-          <div style="font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase;">Quick Test Logins</div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-            <button class="btn btn-secondary btn-sm" onclick="fillLogin('admin', 'admin123')">🔑 Admin</button>
-            <button class="btn btn-secondary btn-sm" onclick="fillLogin('audit1', 'audit123')">📱 Mobile Auditor 1</button>
-            <button class="btn btn-secondary btn-sm" onclick="fillLogin('audit2', 'audit123')">📱 Mobile Auditor 2</button>
-            <button class="btn btn-secondary btn-sm" onclick="fillLogin('MEC1001', 'mechanic123')">👷 Mechanic (Rajesh)</button>
-          </div>
-        </div>
       </div>
       <div style="text-align: center; margin-top: 12px;">
         <button class="btn btn-secondary btn-sm" onclick="openMobilePairingModal()">📱 Connect Mobile Phones (QR Code)</button>
       </div>
     </div>
   `;
-}
-
-function fillLogin(u, p) {
-  document.getElementById('login-username').value = u;
-  document.getElementById('login-password').value = p;
-  document.getElementById('login-form').dispatchEvent(new Event('submit'));
 }
 
 async function handleLoginSubmit(e) {
