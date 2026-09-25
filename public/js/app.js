@@ -725,13 +725,78 @@ async function submitAuditAction(purchaseId, action) {
       payload.message = msg;
     }
 
-    await API.post(`/api/purchases/${purchaseId}/verify`, payload);
+    const res = await API.post(`/api/purchases/${purchaseId}/verify`, payload);
     showToast(`Audit decision recorded: ${action}`, 'success');
     closeModal();
-    renderBillVerifications();
+
+    if (action === 'APPROVE' && res.notification) {
+      showWorkerNotificationModal(res.notification, () => {
+        renderBillVerifications();
+      });
+    } else {
+      renderBillVerifications();
+    }
   } catch (err) {
     // Handled by apiFetch
   }
+}
+
+function showWorkerNotificationModal(notif, onClosed = null) {
+  if (!notif) return;
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal(); if(typeof window._notifOnClose === 'function') window._notifOnClose();">
+      <div class="modal-content" style="max-width:520px;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">📲 Send Alert to ${notif.workerName}</div>
+          <button class="modal-close" onclick="closeModal(); if(typeof window._notifOnClose === 'function') window._notifOnClose();">✕</button>
+        </div>
+
+        <div style="background:#F0FDF4;border:1px solid #BBF7D0;padding:12px;border-radius:var(--radius-sm);margin-bottom:14px;">
+          <div style="font-size:13px;font-weight:700;color:#166534;">✓ Bill Processed & Points Awarded!</div>
+          <div style="font-size:12px;color:#166534;margin-top:2px;">
+            Send an instant WhatsApp or Text SMS to <b>${notif.workerName}</b> (${notif.workerPhone}) with customer and points details.
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Automated WhatsApp / SMS Message Preview</label>
+          <div id="worker-notif-preview" style="background:#0F172A;color:#F8FAFC;padding:12px;border-radius:var(--radius-sm);font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:200px;overflow-y:auto;border:1px solid #334155;line-height:1.4;">${notif.messageText}</div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px;">
+          <a href="${notif.whatsappUrl}" target="_blank" class="btn btn-success btn-lg" style="text-decoration:none;">
+            💬 Open WhatsApp & Send to ${notif.workerName}
+          </a>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <a href="${notif.smsUrl}" class="btn btn-secondary" style="text-decoration:none;">📱 Send as Text SMS</a>
+            <button class="btn btn-secondary" onclick="copyNotifText()">📋 Copy Text</button>
+          </div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:4px;" onclick="closeModal(); if(typeof window._notifOnClose === 'function') window._notifOnClose();">Done</button>
+        </div>
+      </div>
+    </div>
+  `;
+  window._notifOnClose = onClosed;
+}
+
+function copyNotifText() {
+  const el = document.getElementById('worker-notif-preview');
+  if (!el) return;
+  navigator.clipboard.writeText(el.innerText).then(() => {
+    showToast('Notification message copied to clipboard!', 'success');
+  }).catch(() => {
+    showToast('Failed to copy', 'error');
+  });
+}
+
+async function triggerSendWorkerNotification(purchaseId) {
+  try {
+    const res = await API.get(`/api/purchases/${purchaseId}/notification-text`);
+    if (res.notification) {
+      showWorkerNotificationModal(res.notification);
+    }
+  } catch (e) {}
 }
 
 function closeModal() {
@@ -959,7 +1024,14 @@ async function handlePurchaseSubmit(e) {
     const res = await API.post('/api/purchases', payload);
     showToast('Purchase submitted for audit verification!', 'success');
     uploadedBillUrl = '';
-    navigate(AppState.user.role === 'mechanic' ? 'purchases' : 'verifications');
+
+    if (res.notification && (AppState.user.role === 'admin' || AppState.user.role === 'auditor')) {
+      showWorkerNotificationModal(res.notification, () => {
+        navigate(AppState.user.role === 'mechanic' ? 'purchases' : 'verifications');
+      });
+    } else {
+      navigate(AppState.user.role === 'mechanic' ? 'purchases' : 'verifications');
+    }
   } catch (err) {
     btn.disabled = false;
     btn.textContent = 'Submit Purchase for Audit Verification';
@@ -1338,11 +1410,12 @@ async function renderMechanicDetail(mechanicId) {
               <th>Status</th>
               <th>Points Awarded</th>
               <th>Receipt</th>
+              <th>Send Alert</th>
             </tr>
           </thead>
           <tbody>
             ${purchases.length === 0 ? `
-              <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No purchases submitted yet.</td></tr>
+              <tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text-muted);">No purchases submitted yet.</td></tr>
             ` : purchases.map(p => `
               <tr>
                 <td><b>#${p.id}</b></td>
@@ -1364,6 +1437,11 @@ async function renderMechanicDetail(mechanicId) {
                   ${p.bill_file_url ? `
                     <button class="btn btn-secondary btn-sm" onclick="openBillViewerModal('${p.bill_file_url}', ${p.id})">🖼️ View Bill</button>
                   ` : '<span style="color:var(--text-muted);font-size:12px;">No photo</span>'}
+                </td>
+                <td>
+                  <button class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;" onclick="triggerSendWorkerNotification(${p.id})">
+                    💬 WhatsApp
+                  </button>
                 </td>
               </tr>
             `).join('')}
@@ -1507,10 +1585,11 @@ async function renderPurchasesList() {
               <th>Status</th>
               <th>Points</th>
               <th>Bill</th>
+              <th>Notify Worker</th>
             </tr>
           </thead>
           <tbody>
-            ${purchases.length === 0 ? `<tr><td colspan="9">No purchase records found.</td></tr>` : purchases.map(p => `
+            ${purchases.length === 0 ? `<tr><td colspan="10">No purchase records found.</td></tr>` : purchases.map(p => `
               <tr>
                 <td><b>#${p.id}</b></td>
                 <td>${p.purchase_date}</td>
@@ -1522,6 +1601,11 @@ async function renderPurchasesList() {
                 <td><b>${p.points_awarded !== null ? p.points_awarded : '-'}</b></td>
                 <td>
                   ${p.bill_file_url ? `<button class="btn btn-secondary btn-sm" onclick="openBillViewerModal('${p.bill_file_url}', ${p.id})">View</button>` : '-'}
+                </td>
+                <td>
+                  <button class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;" onclick="triggerSendWorkerNotification(${p.id})">
+                    💬 WhatsApp
+                  </button>
                 </td>
               </tr>
             `).join('')}

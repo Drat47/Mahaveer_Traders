@@ -98,6 +98,49 @@ function creditPoints(mechanicId, points, type, refId, desc, actorName) {
   }
 }
 
+// Helper: Build WhatsApp and SMS Notification Text for Worker
+function buildWorkerBillNotification(purchase, mechanic, pointsAwarded, status = 'APPROVED') {
+  const itemsText = (purchase.items || []).map(i => `${i.product_name} (${i.quantity} ${i.unit})`).join(', ') || 'General materials';
+  const cleanPhone = (mechanic.phone || '').replace(/[^0-9]/g, '');
+
+  let text = '';
+  if (status === 'APPROVED') {
+    text = `🏪 *MAHAVEER TRADERS - POINTS CREDIT ALERT* 🏪\n\n` +
+      `Hello *${mechanic.name}*,\n` +
+      `A new customer bill under your reference has been *APPROVED*!\n\n` +
+      `📄 *Bill ID:* #${purchase.id}\n` +
+      `📅 *Date:* ${purchase.purchase_date}\n` +
+      `👤 *Customer:* ${purchase.customer_name}\n` +
+      `📞 *Customer Phone:* ${purchase.customer_phone}\n` +
+      `📍 *Location:* ${purchase.customer_address}\n` +
+      `💰 *Total Bill Amount:* ₹${Number(purchase.total_amount || 0).toLocaleString('en-IN')}\n` +
+      `📦 *Items:* ${itemsText}\n\n` +
+      `🎁 *Points Earned on this Bill:* +${pointsAwarded} Points!\n` +
+      `⭐ *Your Available Balance:* ${mechanic.available_points} Points\n\n` +
+      `Thank you for partnering with Mahaveer Traders!`;
+  } else {
+    text = `🏪 *MAHAVEER TRADERS - BILL LOGGED* 🏪\n\n` +
+      `Hello *${mechanic.name}*,\n` +
+      `A new customer bill has been logged under your reference!\n\n` +
+      `📄 *Bill ID:* #${purchase.id}\n` +
+      `📅 *Date:* ${purchase.purchase_date}\n` +
+      `👤 *Customer:* ${purchase.customer_name}\n` +
+      `📞 *Customer Phone:* ${purchase.customer_phone}\n` +
+      `💰 *Total Bill Amount:* ₹${Number(purchase.total_amount || 0).toLocaleString('en-IN')}\n` +
+      `📦 *Items:* ${itemsText}\n\n` +
+      `⏳ *Status:* Pending Verification (Estimated: +${pointsAwarded} pts)\n\n` +
+      `Mahaveer Traders`;
+  }
+
+  return {
+    workerName: mechanic.name,
+    workerPhone: cleanPhone,
+    whatsappUrl: `https://wa.me/91${cleanPhone}?text=${encodeURIComponent(text)}`,
+    smsUrl: `sms:+91${cleanPhone}?body=${encodeURIComponent(text)}`,
+    messageText: text
+  };
+}
+
 // Helper: Parse Request JSON Body
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -552,12 +595,15 @@ const server = http.createServer(async (req, res) => {
         insertItem.run(purId, it.productId || null, it.productName, parseFloat(it.quantity) || 1, it.unit || 'Unit');
       }
 
-      const mech = db.prepare("SELECT name, uid FROM mechanics WHERE id = ?").get(targetMechId);
+      const mech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(targetMechId);
       addNotification(targetMechId, `Purchase submitted successfully on ${purchaseDate} for ₹${amt.toLocaleString('en-IN')}. Pending verification.`);
       addNotification(0, `New bill submitted by ${mech.name} (${mech.uid}) for ₹${amt.toLocaleString('en-IN')}. Awaiting audit verification.`);
       logAudit(user.name, user.role, 'Submit Purchase', `Submitted Bill #${purId} for Mechanic ${mech.name} (Amount: ₹${amt})`, req);
 
-      return sendJson({ success: true, purchaseId: purId, message: 'Purchase submitted for verification' });
+      const purchaseRecord = { id: purId, purchase_date: purchaseDate, customer_name: customerName, customer_phone: customerPhone, customer_address: customerAddress, total_amount: amt, items };
+      const notification = buildWorkerBillNotification(purchaseRecord, mech, Math.round(amt * 3 / 100), 'PENDING');
+
+      return sendJson({ success: true, purchaseId: purId, message: 'Purchase submitted for verification', notification });
     }
 
     // Single Purchase Detail
@@ -581,6 +627,24 @@ const server = http.createServer(async (req, res) => {
 
       purchase.items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
       return sendJson({ purchase });
+    }
+
+    // Purchase Notification Text Endpoint (for WhatsApp / SMS sharing anytime)
+    const purNotifMatch = pathname.match(/^\/api\/purchases\/(\d+)\/notification-text$/);
+    if (purNotifMatch && req.method === 'GET') {
+      const user = authenticate(req);
+      if (!user) return sendError('Unauthorized', 401);
+
+      const id = parseInt(purNotifMatch[1], 10);
+      const purchase = db.prepare("SELECT * FROM purchases WHERE id = ?").get(id);
+      if (!purchase) return sendError('Purchase not found', 404);
+      const mech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(purchase.mechanic_id);
+      purchase.items = db.prepare("SELECT * FROM purchase_items WHERE purchase_id = ?").all(id);
+
+      const pts = purchase.points_awarded !== null ? purchase.points_awarded : Math.round(purchase.total_amount * 3 / 100);
+      const notif = buildWorkerBillNotification(purchase, mech, pts, purchase.status);
+
+      return sendJson({ notification: notif });
     }
 
     // 8. Purchase Verification / Auditing Action (Approve / Reject / Correction)
@@ -621,10 +685,14 @@ const server = http.createServer(async (req, res) => {
 
         creditPoints(purchase.mechanic_id, pts, 'PURCHASE_APPROVED', id, `Purchase Approved (Bill #${id}, ₹${purchase.total_amount.toLocaleString('en-IN')})`, user.name);
 
+        const updatedMech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(purchase.mechanic_id);
+        purchase.items = items;
+        const notification = buildWorkerBillNotification(purchase, updatedMech, pts, 'APPROVED');
+
         addNotification(purchase.mechanic_id, `Your purchase (Bill #${id} - ₹${purchase.total_amount.toLocaleString('en-IN')}) was approved! You earned +${pts} points.`);
         logAudit(user.name, user.role, 'Approve Purchase', `Approved Bill #${id} for ${mech.name} (+${pts} pts)`, req);
 
-        return sendJson({ success: true, status: 'APPROVED', points: pts });
+        return sendJson({ success: true, status: 'APPROVED', points: pts, notification });
       }
 
       if (action === 'REJECT') {
