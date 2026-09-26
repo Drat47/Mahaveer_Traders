@@ -970,9 +970,36 @@ const server = http.createServer(async (req, res) => {
 
     // 12. Rewards & Redemptions API
     if (pathname === '/api/rewards' && req.method === 'GET') {
-      const rewards = db.prepare("SELECT * FROM rewards ORDER BY points_required ASC").all();
-      for (const r of rewards) {
+      const user = authenticate(req);
+      let query = "SELECT * FROM rewards WHERE 1=1";
+      const params = [];
+      if (user && user.role === 'mechanic') {
+        query += " AND is_active = 1";
+      }
+      query += " ORDER BY points_required ASC";
+
+      const allRewards = db.prepare(query).all(...params);
+      const rewards = [];
+      let mechTrade = null;
+      if (user && user.role === 'mechanic' && user.mechanicId) {
+        const mech = db.prepare("SELECT trade_type FROM mechanics WHERE id = ?").get(user.mechanicId);
+        if (mech) mechTrade = mech.trade_type;
+      }
+
+      for (const r of allRewards) {
         try { r.eligible_types = JSON.parse(r.eligible_types); } catch (e) { r.eligible_types = ['all']; }
+        if (!Array.isArray(r.eligible_types)) r.eligible_types = ['all'];
+
+        if (user && user.role === 'mechanic') {
+          const isAll = r.eligible_types.includes('all');
+          const isEligible = mechTrade && r.eligible_types.includes(mechTrade);
+          if (isAll || isEligible) {
+            rewards.push(r);
+          }
+        } else {
+          // Admin & Auditor see all
+          rewards.push(r);
+        }
       }
       return sendJson({ rewards });
     }

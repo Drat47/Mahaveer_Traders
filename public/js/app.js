@@ -2307,6 +2307,8 @@ async function handleProcessReturnSubmit(e, purchaseId) {
 
 /* =========================================================================
    REWARDS & REDEMPTIONS VIEW & MANAGEMENT
+/* =========================================================================
+   REWARDS & REDEMPTIONS VIEW & MANAGEMENT (TRADE-TARGETED VISIBILITY)
    ========================================================================= */
 
 async function renderRewardsView() {
@@ -2317,16 +2319,23 @@ async function renderRewardsView() {
   const isAdmin = AppState.user.role === 'admin';
 
   let mechPoints = 0;
+  let mechTrade = 'Worker';
   if (isMechanic && AppState.user.mechanic) {
     mechPoints = AppState.user.mechanic.available_points || 0;
+    mechTrade = AppState.user.mechanic.trade_type || 'General';
   }
+
+  // Store rewards globally for admin preview filtering
+  window._adminCatalogRewards = rewards;
 
   main.innerHTML = `
     <div class="top-bar">
       <div>
         <h1 class="page-title">🎁 Rewards Catalog</h1>
         <p style="font-size:13px;color:var(--text-muted)">
-          ${isMechanic ? `Your Available Points: <b style="color:var(--primary);font-size:16px;">${mechPoints} pts</b>` : 'Manage catalog items, points required, stock inventory, and trade eligibility'}
+          ${isMechanic ? `
+            Your Available Balance: <b style="color:var(--primary);font-size:16px;">${mechPoints} pts</b> · Trade Category: <span class="badge" style="background:#E0F2FE;color:#0284C7;font-weight:700;">${mechTrade}</span>
+          ` : 'Configure rewards catalog, point values, inventory, and category-targeted visibility'}
         </p>
       </div>
       <div class="top-actions">
@@ -2334,64 +2343,134 @@ async function renderRewardsView() {
       </div>
     </div>
 
-    ${rewards.length === 0 ? `
-      <div class="card" style="text-align:center;padding:48px;">
-        <p style="font-size:16px;color:var(--text-muted);margin-bottom:16px;">No reward items available in catalog yet.</p>
-        ${isAdmin ? `<button class="btn btn-primary" onclick="openAddRewardModal()">+ Add First Reward Item</button>` : ''}
+    ${isAdmin ? `
+      <!-- Admin Visibility Filter & Preview Bar -->
+      <div class="card" style="margin-bottom:16px;padding:12px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+          <div style="font-size:13px;font-weight:700;color:var(--primary);display:flex;align-items:center;gap:6px;">
+            <span>👁️ Filter View by Worker Category:</span>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;" id="reward-filter-pills">
+            <button class="btn btn-sm btn-primary pill-filter active" data-filter="ALL" onclick="filterAdminRewards('ALL')">All Rewards (${rewards.length})</button>
+            <button class="btn btn-sm btn-secondary pill-filter" data-filter="all_trades" onclick="filterAdminRewards('all_trades')">🌟 Visible to All</button>
+            ${TRADE_TYPES.map(t => {
+              const count = rewards.filter(r => (r.eligible_types || []).includes('all') || (r.eligible_types || []).includes(t)).length;
+              return `<button class="btn btn-sm btn-secondary pill-filter" data-filter="${t}" onclick="filterAdminRewards('${t}')">${t} (${count})</button>`;
+            }).join('')}
+          </div>
+        </div>
       </div>
-    ` : `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
-        ${rewards.map(r => {
-          const isEligible = isMechanic ? (mechPoints >= r.points_required && r.stock > 0) : true;
-          return `
-            <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;border-top:3px solid ${r.is_active ? 'var(--accent)' : 'var(--border)'};">
-              <div>
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-                  <h3 style="font-size:16px;font-weight:700;color:var(--primary);margin:0;">${r.name}</h3>
-                  <span class="badge ${r.stock > 0 ? (r.is_active ? 'badge-active' : 'badge-inactive') : 'badge-inactive'}">
-                    ${r.stock > 0 ? `${r.stock} in stock` : 'Out of Stock'}
-                  </span>
-                </div>
-                
-                <div style="margin:14px 0;">
-                  <span style="font-size:24px;font-weight:800;color:var(--accent);">${r.points_required.toLocaleString()}</span>
-                  <span style="font-size:13px;color:var(--text-muted);font-weight:600;margin-left:4px;">Points</span>
-                </div>
+    ` : ''}
 
-                <div style="font-size:12px;color:var(--text-muted);background:#F8FAFC;padding:8px 10px;border-radius:var(--radius-sm);">
-                  <b>Eligible:</b> ${(r.eligible_types || []).includes('all') ? '🌟 All Trade Professionals' : (r.eligible_types || []).join(', ')}
-                </div>
-              </div>
-
-              <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
-                ${isMechanic ? `
-                  <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name}')">
-                    ${r.stock < 1 ? 'Out of Stock' : mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
-                  </button>
-                ` : `
-                  <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
-                    <div style="display:flex;gap:6px;">
-                      <button class="btn btn-secondary btn-sm" onclick="openEditRewardModal(${r.id}, '${r.name.replace(/'/g, "\\'")}', ${r.points_required}, ${r.stock}, ${JSON.stringify(r.eligible_types).replace(/"/g, '&quot;')})">✏️ Edit</button>
-                      <button class="btn btn-secondary btn-sm" onclick="toggleRewardActive(${r.id})">${r.is_active ? 'Deactivate' : 'Activate'}</button>
-                    </div>
-                    <button class="btn btn-danger btn-sm" onclick="deleteReward(${r.id}, '${r.name.replace(/'/g, "\\'")}')">🗑️</button>
-                  </div>
-                `}
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `}
+    <div id="rewards-grid-container" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
+      ${renderRewardsCardsHtml(rewards, isMechanic, isAdmin, mechPoints, mechTrade)}
+    </div>
   `;
 }
 
-// Modal: Add Reward Item
+function renderRewardsCardsHtml(rewardsList, isMechanic, isAdmin, mechPoints, mechTrade) {
+  if (!rewardsList || rewardsList.length === 0) {
+    return `
+      <div class="card" style="grid-column:1/-1;text-align:center;padding:48px;">
+        <p style="font-size:15px;color:var(--text-muted);margin-bottom:12px;">
+          ${isMechanic ? `No reward items are currently assigned to the "${mechTrade}" category.` : 'No rewards found matching this category filter.'}
+        </p>
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="openAddRewardModal()">+ Add New Reward</button>` : ''}
+      </div>
+    `;
+  }
+
+  return rewardsList.map(r => {
+    const isAll = (r.eligible_types || []).includes('all');
+    const isEligible = isMechanic ? ((isAll || (r.eligible_types || []).includes(mechTrade)) && mechPoints >= r.points_required && r.stock > 0) : true;
+    
+    return `
+      <div class="card reward-item-card" data-eligible='${JSON.stringify(r.eligible_types || ["all"])}' style="display:flex;flex-direction:column;justify-content:space-between;border-top:3px solid ${r.is_active ? 'var(--accent)' : 'var(--border)'};">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <h3 style="font-size:16px;font-weight:700;color:var(--primary);margin:0;">${r.name}</h3>
+            <span class="badge ${r.stock > 0 ? (r.is_active ? 'badge-active' : 'badge-inactive') : 'badge-inactive'}">
+              ${r.stock > 0 ? `${r.stock} in stock` : 'Out of Stock'}
+            </span>
+          </div>
+          
+          <div style="margin:14px 0;">
+            <span style="font-size:24px;font-weight:800;color:var(--accent);">${r.points_required.toLocaleString()}</span>
+            <span style="font-size:13px;color:var(--text-muted);font-weight:600;margin-left:4px;">Points</span>
+          </div>
+
+          ${isAdmin ? `
+            <div style="margin-top:8px;">
+              ${isAll ? `
+                <div style="font-size:12px;background:#DCFCE7;color:#166534;padding:8px 10px;border-radius:var(--radius-sm);border:1px solid #BBF7D0;">
+                  <b>👁️ Visibility:</b> Visible to <b>ALL Trade Categories</b>
+                </div>
+              ` : `
+                <div style="font-size:12px;background:#EFF6FF;color:#1D4ED8;padding:8px 10px;border-radius:var(--radius-sm);border:1px solid #BFDBFE;">
+                  <b>👁️ Visible ONLY to:</b> <b>${(r.eligible_types || []).join(', ')}</b>
+                  <div style="font-size:11px;color:#DC2626;margin-top:2px;font-weight:600;">🚫 Hidden from other trade workers</div>
+                </div>
+              `}
+            </div>
+          ` : `
+            <div style="font-size:12px;color:var(--text-muted);background:#F8FAFC;padding:8px 10px;border-radius:var(--radius-sm);">
+              <b>Eligible:</b> ${isAll ? '🌟 All Trade Categories' : (r.eligible_types || []).join(', ')}
+            </div>
+          `}
+        </div>
+
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+          ${isMechanic ? `
+            <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name}')">
+              ${r.stock < 1 ? 'Out of Stock' : mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
+            </button>
+          ` : `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-secondary btn-sm" onclick="openEditRewardModal(${r.id}, '${r.name.replace(/'/g, "\\'")}', ${r.points_required}, ${r.stock}, ${JSON.stringify(r.eligible_types).replace(/"/g, '&quot;')})">✏️ Edit Visibility</button>
+                <button class="btn btn-secondary btn-sm" onclick="toggleRewardActive(${r.id})">${r.is_active ? 'Deactivate' : 'Activate'}</button>
+              </div>
+              <button class="btn btn-danger btn-sm" onclick="deleteReward(${r.id}, '${r.name.replace(/'/g, "\\'")}')" title="Delete reward">🗑️</button>
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function filterAdminRewards(category) {
+  const allRewards = window._adminCatalogRewards || [];
+  const pills = document.querySelectorAll('#reward-filter-pills .pill-filter');
+  pills.forEach(p => {
+    if (p.getAttribute('data-filter') === category) {
+      p.className = 'btn btn-sm btn-primary pill-filter active';
+    } else {
+      p.className = 'btn btn-sm btn-secondary pill-filter';
+    }
+  });
+
+  let filtered = [];
+  if (category === 'ALL') {
+    filtered = allRewards;
+  } else if (category === 'all_trades') {
+    filtered = allRewards.filter(r => (r.eligible_types || []).includes('all'));
+  } else {
+    filtered = allRewards.filter(r => (r.eligible_types || []).includes('all') || (r.eligible_types || []).includes(category));
+  }
+
+  const container = document.getElementById('rewards-grid-container');
+  if (container) {
+    container.innerHTML = renderRewardsCardsHtml(filtered, false, true, 0, 'Admin');
+  }
+}
+
+// Modal: Add Reward Item with Visibility Options
 function openAddRewardModal() {
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" onclick="closeModal()">
-      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:500px;">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:540px;">
         <div class="modal-header">
           <div class="card-title">🎁 Add New Reward Item</div>
           <button class="modal-close" onclick="closeModal()">✕</button>
@@ -2413,17 +2492,34 @@ function openAddRewardModal() {
             </div>
           </div>
 
-          <div class="form-group">
-            <label>Eligible Trade Categories</label>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
-              <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1 / -1;border-bottom:1px solid var(--border);padding-bottom:6px;">
-                <input type="checkbox" id="trade-all" value="all" checked onchange="handleTradeAllToggle(this)"> <b>🌟 All Trade Professionals</b>
+          <!-- Visibility & Category Targeting -->
+          <div class="form-group" style="margin-top:12px;">
+            <label style="font-weight:700;font-size:13px;color:var(--primary);">👁️ Worker Visibility & Trade Targeting</label>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Choose which workers will see this reward in their mobile app catalog:</p>
+            
+            <div style="background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px;">
+                <input type="radio" name="add-reward-vis" value="all" checked onchange="toggleAddRewardVisMode('all')">
+                <span>🌟 Visible to ALL Workers (Shown across all trade categories)</span>
               </label>
-              ${TRADE_TYPES.map(t => `
-                <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
-                  <input type="checkbox" class="trade-item-check" value="${t}" checked> ${t}
-                </label>
-              `).join('')}
+              
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:6px;">
+                <input type="radio" name="add-reward-vis" value="custom" onchange="toggleAddRewardVisMode('custom')">
+                <span>🎯 Visible to SPECIFIC Trade Categories Only</span>
+              </label>
+              
+              <div id="add-vis-categories-box" style="display:none;padding-top:10px;border-top:1px dashed var(--border);margin-top:8px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+                  Check the categories that <b>CAN view</b> this reward. Unchecked categories will <b>NOT see it</b>:
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                  ${TRADE_TYPES.map(t => `
+                    <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;background:#fff;padding:6px 8px;border-radius:4px;border:1px solid var(--border);">
+                      <input type="checkbox" class="add-trade-check" value="${t}"> <span>${t}</span>
+                    </label>
+                  `).join('')}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2437,9 +2533,11 @@ function openAddRewardModal() {
   `;
 }
 
-function handleTradeAllToggle(allCheck) {
-  const checks = document.querySelectorAll('.trade-item-check');
-  checks.forEach(c => c.checked = allCheck.checked);
+function toggleAddRewardVisMode(mode) {
+  const box = document.getElementById('add-vis-categories-box');
+  if (box) {
+    box.style.display = mode === 'custom' ? 'block' : 'none';
+  }
 }
 
 async function handleAddRewardSubmit(e) {
@@ -2449,14 +2547,15 @@ async function handleAddRewardSubmit(e) {
   const pointsRequired = parseInt(document.getElementById('new-reward-points').value, 10);
   const stock = parseInt(document.getElementById('new-reward-stock').value, 10);
 
-  const allTradesChecked = document.getElementById('trade-all')?.checked;
-  const checks = document.querySelectorAll('.trade-item-check:checked');
-  let eligibleTypes = [];
-  if (allTradesChecked || checks.length === TRADE_TYPES.length) {
-    eligibleTypes = ['all'];
-  } else {
-    eligibleTypes = Array.from(checks).map(c => c.value);
-    if (eligibleTypes.length === 0) eligibleTypes = ['all'];
+  const visMode = document.querySelector('input[name="add-reward-vis"]:checked')?.value || 'all';
+  let eligibleTypes = ['all'];
+
+  if (visMode === 'custom') {
+    const checked = Array.from(document.querySelectorAll('.add-trade-check:checked')).map(c => c.value);
+    if (checked.length === 0) {
+      return showToast('Please select at least one trade category or choose "Visible to ALL"', 'error');
+    }
+    eligibleTypes = checked;
   }
 
   if (!name || isNaN(pointsRequired) || pointsRequired <= 0) {
@@ -2482,7 +2581,7 @@ async function handleAddRewardSubmit(e) {
   }
 }
 
-// Modal: Edit Reward Item
+// Modal: Edit Reward Item with Visibility Options
 function openEditRewardModal(id, currentName, currentPoints, currentStock, currentEligible) {
   const modalRoot = document.getElementById('modal-root');
   let elig = currentEligible || ['all'];
@@ -2493,9 +2592,9 @@ function openEditRewardModal(id, currentName, currentPoints, currentStock, curre
 
   modalRoot.innerHTML = `
     <div class="modal-backdrop" onclick="closeModal()">
-      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:500px;">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:540px;">
         <div class="modal-header">
-          <div class="card-title">✏️ Edit Reward Item</div>
+          <div class="card-title">✏️ Edit Reward & Visibility</div>
           <button class="modal-close" onclick="closeModal()">✕</button>
         </div>
         <form onsubmit="handleEditRewardSubmit(event, ${id})">
@@ -2515,23 +2614,40 @@ function openEditRewardModal(id, currentName, currentPoints, currentStock, curre
             </div>
           </div>
 
-          <div class="form-group">
-            <label>Eligible Trade Categories</label>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
-              <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;grid-column:1 / -1;border-bottom:1px solid var(--border);padding-bottom:6px;">
-                <input type="checkbox" id="edit-trade-all" value="all" ${isAll ? 'checked' : ''} onchange="handleEditTradeAllToggle(this)"> <b>🌟 All Trade Professionals</b>
+          <!-- Visibility & Category Targeting -->
+          <div class="form-group" style="margin-top:12px;">
+            <label style="font-weight:700;font-size:13px;color:var(--primary);">👁️ Worker Visibility & Trade Targeting</label>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Choose which workers will see this reward in their mobile app catalog:</p>
+            
+            <div style="background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px;">
+                <input type="radio" name="edit-reward-vis" value="all" ${isAll ? 'checked' : ''} onchange="toggleEditRewardVisMode('all')">
+                <span>🌟 Visible to ALL Workers (Shown across all trade categories)</span>
               </label>
-              ${TRADE_TYPES.map(t => `
-                <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;">
-                  <input type="checkbox" class="edit-trade-item-check" value="${t}" ${isAll || elig.includes(t) ? 'checked' : ''}> ${t}
-                </label>
-              `).join('')}
+              
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:6px;">
+                <input type="radio" name="edit-reward-vis" value="custom" ${!isAll ? 'checked' : ''} onchange="toggleEditRewardVisMode('custom')">
+                <span>🎯 Visible to SPECIFIC Trade Categories Only</span>
+              </label>
+              
+              <div id="edit-vis-categories-box" style="display:${!isAll ? 'block' : 'none'};padding-top:10px;border-top:1px dashed var(--border);margin-top:8px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">
+                  Check the categories that <b>CAN view</b> this reward. Unchecked categories will <b>NOT see it</b>:
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+                  ${TRADE_TYPES.map(t => `
+                    <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;background:#fff;padding:6px 8px;border-radius:4px;border:1px solid var(--border);">
+                      <input type="checkbox" class="edit-trade-check" value="${t}" ${!isAll && elig.includes(t) ? 'checked' : ''}> <span>${t}</span>
+                    </label>
+                  `).join('')}
+                </div>
+              </div>
             </div>
           </div>
 
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;">
             <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-            <button type="submit" class="btn btn-primary" id="edit-reward-btn">Update Reward</button>
+            <button type="submit" class="btn btn-primary" id="edit-reward-btn">Update Reward & Visibility</button>
           </div>
         </form>
       </div>
@@ -2539,9 +2655,11 @@ function openEditRewardModal(id, currentName, currentPoints, currentStock, curre
   `;
 }
 
-function handleEditTradeAllToggle(allCheck) {
-  const checks = document.querySelectorAll('.edit-trade-item-check');
-  checks.forEach(c => c.checked = allCheck.checked);
+function toggleEditRewardVisMode(mode) {
+  const box = document.getElementById('edit-vis-categories-box');
+  if (box) {
+    box.style.display = mode === 'custom' ? 'block' : 'none';
+  }
 }
 
 async function handleEditRewardSubmit(e, id) {
@@ -2551,14 +2669,15 @@ async function handleEditRewardSubmit(e, id) {
   const pointsRequired = parseInt(document.getElementById('edit-reward-points').value, 10);
   const stock = parseInt(document.getElementById('edit-reward-stock').value, 10);
 
-  const allTradesChecked = document.getElementById('edit-trade-all')?.checked;
-  const checks = document.querySelectorAll('.edit-trade-item-check:checked');
-  let eligibleTypes = [];
-  if (allTradesChecked || checks.length === TRADE_TYPES.length) {
-    eligibleTypes = ['all'];
-  } else {
-    eligibleTypes = Array.from(checks).map(c => c.value);
-    if (eligibleTypes.length === 0) eligibleTypes = ['all'];
+  const visMode = document.querySelector('input[name="edit-reward-vis"]:checked')?.value || 'all';
+  let eligibleTypes = ['all'];
+
+  if (visMode === 'custom') {
+    const checked = Array.from(document.querySelectorAll('.edit-trade-check:checked')).map(c => c.value);
+    if (checked.length === 0) {
+      return showToast('Please select at least one trade category or choose "Visible to ALL"', 'error');
+    }
+    eligibleTypes = checked;
   }
 
   btn.disabled = true;
@@ -2576,7 +2695,7 @@ async function handleEditRewardSubmit(e, id) {
     renderRewardsView();
   } catch (err) {
     btn.disabled = false;
-    btn.textContent = 'Update Reward';
+    btn.textContent = 'Update Reward & Visibility';
   }
 }
 
