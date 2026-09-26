@@ -1644,7 +1644,10 @@ async function renderMechanicsList() {
                 <td><span class="badge ${m.is_active ? 'badge-active' : 'badge-inactive'}">${m.is_active ? 'Active' : 'Inactive'}</span></td>
                 <td>
                   <button class="btn btn-secondary btn-sm" onclick="navigate('mechanic_detail', ${m.id})">Profile</button>
-                  ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="toggleMechanicStatus(${m.id})">${m.is_active ? 'Deactivate' : 'Activate'}</button>` : ''}
+                  ${isAdmin ? `
+                    <button class="btn btn-secondary btn-sm" onclick="openResetMechanicPasswordModal(${m.id}, '${m.name.replace(/'/g, "\\'")}', '${m.uid}')" title="Reset Password">🔑 Reset PW</button>
+                    <button class="btn btn-secondary btn-sm" onclick="toggleMechanicStatus(${m.id})">${m.is_active ? 'Deactivate' : 'Activate'}</button>
+                  ` : ''}
                 </td>
               </tr>
             `).join('')}
@@ -1906,6 +1909,7 @@ async function renderMechanicDetail(mechanicId) {
         <a href="tel:${m.phone}" class="btn btn-secondary btn-sm">📞 Call Worker</a>
         <a href="https://wa.me/91${m.phone}" target="_blank" class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;">💬 WhatsApp</a>
         ${isAdmin ? `
+          <button class="btn btn-secondary btn-sm" onclick="openResetMechanicPasswordModal(${m.id}, '${m.name.replace(/'/g, "\\'")}', '${m.uid}')">🔑 Reset Password</button>
           <button class="btn btn-primary btn-sm" onclick="openAdjustPointsModal(${m.id}, '${m.name}')">± Adjust Points</button>
           <button class="btn btn-secondary btn-sm" onclick="toggleMechanicStatusDetail(${m.id})">${m.is_active ? 'Deactivate' : 'Activate'}</button>
         ` : ''}
@@ -2098,6 +2102,91 @@ async function handleAdjustPointsSubmit(e, mechId) {
     closeModal();
     renderMechanicDetail(mechId);
   } catch (err) {}
+}
+
+// Modal: Admin Reset Mechanic Password
+function openResetMechanicPasswordModal(mechId, mechName, mechUid) {
+  const modalRoot = document.getElementById('modal-root');
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" style="max-width:440px;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div>
+            <div class="card-title">🔑 Reset Worker Password</div>
+            <small style="color:var(--text-muted)">${mechName} (User ID: ${mechUid})</small>
+          </div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <form onsubmit="handleAdminResetMechanicPasswordSubmit(event, ${mechId}, '${mechName.replace(/'/g, "\\'")}')">
+          <div class="form-group" style="margin-bottom:14px;">
+            <label>New Password <span style="color:var(--danger)">*</span></label>
+            <div style="position:relative;display:flex;align-items:center;">
+              <input type="password" id="admin-reset-pw" required minlength="4" placeholder="Enter new password (min 4 chars)" style="padding-right:40px;width:100%;">
+              <button type="button" onclick="togglePasswordVisibility('admin-reset-pw', this)" style="position:absolute;right:10px;background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-muted);" title="Toggle visibility">👁️</button>
+            </div>
+            <small style="color:var(--text-muted)">Minimum 4 characters.</small>
+          </div>
+
+          <div class="form-group" style="margin-bottom:18px;">
+            <label>Confirm New Password <span style="color:var(--danger)">*</span></label>
+            <div style="position:relative;display:flex;align-items:center;">
+              <input type="password" id="admin-reset-confirm-pw" required minlength="4" placeholder="Re-enter new password" style="padding-right:40px;width:100%;">
+              <button type="button" onclick="togglePasswordVisibility('admin-reset-confirm-pw', this)" style="position:absolute;right:10px;background:none;border:none;cursor:pointer;font-size:16px;color:var(--text-muted);" title="Toggle visibility">👁️</button>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="admin-reset-submit-btn">Reset Password</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+function togglePasswordVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁️';
+  }
+}
+
+async function handleAdminResetMechanicPasswordSubmit(e, mechId, mechName) {
+  e.preventDefault();
+  const newPw = document.getElementById('admin-reset-pw').value;
+  const confirmPw = document.getElementById('admin-reset-confirm-pw').value;
+  const submitBtn = document.getElementById('admin-reset-submit-btn');
+
+  if (newPw.length < 4) {
+    return showToast('Password must be at least 4 characters long', 'error');
+  }
+
+  if (newPw !== confirmPw) {
+    return showToast('Passwords do not match! Please check and try again.', 'error');
+  }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Updating...';
+
+  try {
+    const res = await API.post(`/api/mechanics/${mechId}/reset-password`, { newPassword: newPw });
+    showToast(res.message || `Password successfully updated for ${mechName}`, 'success');
+    closeModal();
+    if (AppState.view === 'mechanic_detail') {
+      renderMechanicDetail(mechId);
+    } else if (AppState.view === 'mechanics') {
+      renderMechanicsList();
+    }
+  } catch (err) {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Reset Password';
+  }
 }
 
 /* =========================================================================

@@ -621,6 +621,41 @@ const server = http.createServer(async (req, res) => {
       return sendJson({ success: true, is_active: newStatus });
     }
 
+    // Admin Reset Password for Mechanic
+    const mechResetPwMatch = pathname.match(/^\/api\/mechanics\/(\d+)\/reset-password$/);
+    if (mechResetPwMatch && req.method === 'POST') {
+      const user = authenticate(req);
+      if (!user || user.role !== 'admin') return sendError('Forbidden: Admin access required', 403);
+      const id = parseInt(mechResetPwMatch[1], 10);
+      const body = await parseJsonBody(req);
+      const { newPassword } = body;
+
+      if (!newPassword || newPassword.trim().length < 4) {
+        return sendError('Password must be at least 4 characters long', 400);
+      }
+
+      const mech = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(id);
+      if (!mech) return sendError('Mechanic not found', 404);
+
+      const cleanPw = newPassword.trim();
+      // Update password in mechanics table
+      db.prepare("UPDATE mechanics SET password = ? WHERE id = ?").run(cleanPw, id);
+
+      // Update password in users table (by mechanic_id, username/uid, or phone)
+      db.prepare(`
+        UPDATE users SET password = ? 
+        WHERE mechanic_id = ? OR (role = 'mechanic' AND (username = ? OR phone = ?))
+      `).run(cleanPw, id, mech.uid, mech.phone);
+
+      addNotification(id, `Your account password was updated by Admin on ${new Date().toLocaleDateString('en-IN')}.`);
+      logAudit(user.name, user.role, 'Admin Reset Mechanic Password', `Password reset for ${mech.name} (${mech.uid})`, req);
+
+      return sendJson({
+        success: true,
+        message: `Password successfully updated for ${mech.name} (${mech.uid})`
+      });
+    }
+
     // Manual Adjust Points
     const mechAdjustMatch = pathname.match(/^\/api\/mechanics\/(\d+)\/adjust-points$/);
     if (mechAdjustMatch && req.method === 'POST') {
