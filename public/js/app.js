@@ -137,9 +137,11 @@ function startAutoSync() {
 }
 
 // Navigation Router
+// Navigation Router
 function navigate(view, subId = null) {
   AppState.view = view;
   AppState.subViewId = subId;
+  toggleMobileDrawer(false);
   renderView();
 }
 
@@ -149,10 +151,159 @@ function renderShell() {
   app.innerHTML = `
     <div id="toast-container"></div>
     <div id="modal-root"></div>
+    <div id="mobile-header-slot"></div>
+    <div id="mobile-drawer-slot"></div>
     <div class="app-container" id="app-container">
       <div id="sidebar-slot"></div>
       <main class="main-content" id="main-content"></main>
       <nav class="bottom-nav" id="bottom-nav-slot"></nav>
+    </div>
+  `;
+}
+
+// Mobile Slide Drawer Toggle
+function toggleMobileDrawer(open) {
+  const backdrop = document.getElementById('mobile-drawer-backdrop');
+  const drawer = document.getElementById('mobile-drawer');
+  if (backdrop && drawer) {
+    if (open) {
+      backdrop.classList.add('open');
+      drawer.classList.add('open');
+    } else {
+      backdrop.classList.remove('open');
+      drawer.classList.remove('open');
+    }
+  }
+}
+
+// Render Top Mobile App Header
+function renderMobileHeader() {
+  const slot = document.getElementById('mobile-header-slot');
+  if (!slot) return;
+  if (!AppState.user) {
+    slot.innerHTML = '';
+    return;
+  }
+
+  const role = AppState.user.role;
+  const roleName = role === 'admin' ? 'Admin' : role === 'auditor' ? 'Auditor' : (AppState.user.mechanic?.trade_type || 'Worker');
+
+  slot.innerHTML = `
+    <header class="mobile-header">
+      <div class="mobile-header-left">
+        <button class="mobile-menu-btn" onclick="toggleMobileDrawer(true)" aria-label="Open Navigation Menu">
+          ☰
+        </button>
+        <div class="mobile-brand-title" onclick="navigate('dash')" style="cursor:pointer;">
+          <span>🏪</span>
+          <span>Mahaveer</span>
+          <span class="user-badge role-${role}" style="font-size:10px;padding:1px 5px;">${roleName}</span>
+        </div>
+      </div>
+
+      <div class="mobile-header-right">
+        <button class="mobile-icon-btn" onclick="openMobilePairingModal()" title="Connect Phones">
+          📱
+        </button>
+        <button class="mobile-icon-btn" onclick="navigate('notifications')" title="Notifications">
+          🔔
+        </button>
+        <button class="mobile-icon-btn" onclick="toggleMobileDrawer(true)" title="Profile & Menu" style="background:var(--accent);color:#fff;font-weight:700;font-size:12px;">
+          ${(AppState.user.name || 'U').charAt(0).toUpperCase()}
+        </button>
+      </div>
+    </header>
+  `;
+}
+
+// Render Full Mobile Slide-Out Drawer
+function renderMobileDrawer() {
+  const slot = document.getElementById('mobile-drawer-slot');
+  if (!slot) return;
+  if (!AppState.user) {
+    slot.innerHTML = '';
+    return;
+  }
+
+  const role = AppState.user.role;
+  let navItems = [];
+
+  if (role === 'admin') {
+    navItems = [
+      { id: 'dash', icon: '📊', label: 'Dashboard Overview' },
+      { id: 'verifications', icon: '🔍', label: 'Bill Audits Queue', count: AppState.stats.pendingBills || 0 },
+      { id: 'mechanics', icon: '👷', label: 'Mechanics Directory' },
+      { id: 'purchases', icon: '🧾', label: 'Purchases & Bills' },
+      { id: 'returns', icon: '↩️', label: 'Returns & Reversals' },
+      { id: 'rewards', icon: '🎁', label: 'Rewards Catalog' },
+      { id: 'redemptions', icon: '🏆', label: 'Redemptions', count: AppState.stats.pendingRedemptions || 0 },
+      { id: 'reports', icon: '📈', label: 'Reports & Leaderboard' },
+      { id: 'audit_logs', icon: '📋', label: 'Audit Trail Logs' },
+      { id: 'notifications', icon: '🔔', label: 'Notifications' },
+      { id: 'settings', icon: '⚙️', label: 'Settings & Mobile LAN' }
+    ];
+  } else if (role === 'auditor') {
+    navItems = [
+      { id: 'dash', icon: '📊', label: 'Field Overview' },
+      { id: 'audit_feed', icon: '🔍', label: 'Bill Audit Queue', count: AppState.stats.pendingBills || 0 },
+      { id: 'submit_purchase', icon: '📸', label: 'Snap & Log Bill' },
+      { id: 'mechanics', icon: '👷', label: 'Mechanics Directory' },
+      { id: 'purchases', icon: '🧾', label: 'Audited Purchases' },
+      { id: 'returns', icon: '↩️', label: 'Returns & Reversals' },
+      { id: 'audit_logs', icon: '📋', label: 'My Audit Trail' },
+      { id: 'notifications', icon: '🔔', label: 'Notifications' }
+    ];
+  } else {
+    navItems = [
+      { id: 'dash', icon: '🏠', label: 'My Dashboard' },
+      { id: 'submit_purchase', icon: '📸', label: 'Submit Purchase & Bill' },
+      { id: 'purchases', icon: '🧾', label: 'My Purchase Records' },
+      { id: 'rewards', icon: '🎁', label: 'Rewards & Claim' },
+      { id: 'redemptions', icon: '🏆', label: 'Redemption History' },
+      { id: 'notifications', icon: '🔔', label: 'Notifications' }
+    ];
+  }
+
+  let mechPts = 0;
+  if (role === 'mechanic' && AppState.user.mechanic) {
+    mechPts = AppState.user.mechanic.available_points || 0;
+  }
+
+  slot.innerHTML = `
+    <div class="mobile-drawer-backdrop" id="mobile-drawer-backdrop" onclick="toggleMobileDrawer(false)"></div>
+    <div class="mobile-drawer" id="mobile-drawer">
+      <div class="mobile-drawer-header">
+        <div class="mobile-drawer-user">
+          <div style="font-size:16px;font-weight:700;color:#fff;display:flex;align-items:center;gap:6px;">
+            <span>🏪 Mahaveer Traders</span>
+          </div>
+          <div style="font-size:14px;font-weight:600;color:#38BDF8;margin-top:4px;">${AppState.user.name}</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
+            <span class="user-badge role-${role}">${role}</span>
+            ${role === 'mechanic' ? `<span style="font-size:11px;color:#4ADE80;font-weight:700;">${mechPts} pts</span>` : ''}
+          </div>
+        </div>
+        <button class="mobile-drawer-close" onclick="toggleMobileDrawer(false)">✕</button>
+      </div>
+
+      <div class="mobile-drawer-nav">
+        ${navItems.map(item => `
+          <a class="mobile-drawer-item ${AppState.view === item.id ? 'active' : ''}" onclick="navigate('${item.id}')">
+            <span style="font-size:18px;">${item.icon}</span>
+            <span>${item.label}</span>
+            ${item.count ? `<span class="badge-count">${item.count}</span>` : ''}
+          </a>
+        `).join('')}
+      </div>
+
+      <div class="mobile-drawer-footer">
+        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="openMobilePairingModal(); toggleMobileDrawer(false);">
+          📱 Connect 5-6 Phones (QR)
+        </button>
+        <button class="btn btn-danger btn-sm" style="width:100%;" onclick="logout(true)">
+          🚪 Logout
+        </button>
+      </div>
     </div>
   `;
 }
@@ -164,6 +315,8 @@ async function renderView() {
     return;
   }
 
+  renderMobileHeader();
+  renderMobileDrawer();
   renderSidebar();
   renderBottomNav();
 
@@ -297,7 +450,7 @@ function renderSidebar() {
   `;
 }
 
-// Mobile Bottom Navigation Bar
+// Mobile Bottom Navigation Bar (With 1-Tap Access to All Features via Menu)
 function renderBottomNav() {
   const bottomNav = document.getElementById('bottom-nav-slot');
   if (!AppState.user) {
@@ -308,27 +461,37 @@ function renderBottomNav() {
   const role = AppState.user.role;
   let items = [];
 
-  if (role === 'admin' || role === 'auditor') {
+  if (role === 'admin') {
+    items = [
+      { id: 'dash', icon: '📊', label: 'Dash' },
+      { id: 'verifications', icon: '🔍', label: 'Audits', count: AppState.stats.pendingBills || 0 },
+      { id: 'submit_purchase', icon: '📸', label: 'Snap' },
+      { id: 'returns', icon: '↩️', label: 'Returns' },
+      { id: 'more', icon: '☰', label: 'Menu', isMenu: true }
+    ];
+  } else if (role === 'auditor') {
     items = [
       { id: 'dash', icon: '📊', label: 'Overview' },
-      { id: role === 'admin' ? 'verifications' : 'audit_feed', icon: '🔍', label: 'Audit Queue' },
-      { id: 'submit_purchase', icon: '📸', label: 'Snap Bill' },
-      { id: 'mechanics', icon: '👷', label: 'Mechanics' },
-      { id: 'audit_logs', icon: '📋', label: 'Logs' }
+      { id: 'audit_feed', icon: '🔍', label: 'Queue', count: AppState.stats.pendingBills || 0 },
+      { id: 'submit_purchase', icon: '📸', label: 'Snap' },
+      { id: 'returns', icon: '↩️', label: 'Returns' },
+      { id: 'more', icon: '☰', label: 'Menu', isMenu: true }
     ];
   } else {
     items = [
       { id: 'dash', icon: '🏠', label: 'Home' },
       { id: 'submit_purchase', icon: '📸', label: 'Submit' },
-      { id: 'purchases', icon: '🧾', label: 'Purchases' },
-      { id: 'rewards', icon: '🎁', label: 'Rewards' }
+      { id: 'purchases', icon: '🧾', label: 'Bills' },
+      { id: 'rewards', icon: '🎁', label: 'Rewards' },
+      { id: 'more', icon: '☰', label: 'Menu', isMenu: true }
     ];
   }
 
   bottomNav.innerHTML = items.map(it => `
-    <a class="bottom-nav-item ${AppState.view === it.id ? 'active' : ''}" onclick="navigate('${it.id}')">
+    <a class="bottom-nav-item ${!it.isMenu && AppState.view === it.id ? 'active' : ''}" onclick="${it.isMenu ? 'toggleMobileDrawer(true)' : `navigate('${it.id}')`}">
       <span class="bottom-nav-icon">${it.icon}</span>
       <span>${it.label}</span>
+      ${it.count ? `<span class="badge-count" style="position:absolute;top:4px;right:18px;font-size:10px;padding:1px 5px;">${it.count}</span>` : ''}
     </a>
   `).join('');
 }
