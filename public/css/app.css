@@ -560,20 +560,6 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: 2px;
 }
 
-/* QR Code Modal Box */
-.qr-container {
-  text-align: center;
-  padding: 16px;
-}
-.qr-ip-box {
-  background: #F1F5F9;
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  font-family: monospace;
-  font-size: 14px;
-  margin: 12px 0;
-  word-break: break-all;
-}
 
 /* Return & Reversal Calculation Styles */
 .calc-summary-card {

@@ -202,9 +202,6 @@ function renderMobileHeader() {
       </div>
 
       <div class="mobile-header-right">
-        <button class="mobile-icon-btn" onclick="openMobilePairingModal()" title="Connect Phones">
-          📱
-        </button>
         <button class="mobile-icon-btn" onclick="navigate('notifications')" title="Notifications">
           🔔
         </button>
@@ -240,7 +237,7 @@ function renderMobileDrawer() {
       { id: 'reports', icon: '📈', label: 'Reports & Leaderboard' },
       { id: 'audit_logs', icon: '📋', label: 'Audit Trail Logs' },
       { id: 'notifications', icon: '🔔', label: 'Notifications' },
-      { id: 'settings', icon: '⚙️', label: 'Settings & Mobile LAN' }
+      { id: 'settings', icon: '⚙️', label: 'Settings' }
     ];
   } else if (role === 'auditor') {
     navItems = [
@@ -297,9 +294,6 @@ function renderMobileDrawer() {
       </div>
 
       <div class="mobile-drawer-footer">
-        <button class="btn btn-secondary btn-sm" style="width:100%;" onclick="openMobilePairingModal(); toggleMobileDrawer(false);">
-          📱 Connect 5-6 Phones (QR)
-        </button>
         <button class="btn btn-danger btn-sm" style="width:100%;" onclick="logout(true)">
           🚪 Logout
         </button>
@@ -404,7 +398,7 @@ function renderSidebar() {
       { id: 'redemptions', label: '🏆 Redemptions', count: AppState.stats.pendingRedemptions || 0 },
       { id: 'reports', label: '📈 Reports & Rankings' },
       { id: 'audit_logs', label: '📋 Audit Logs' },
-      { id: 'settings', label: '⚙️ Settings & Mobile Pairing' }
+      { id: 'settings', label: '⚙️ Settings' }
     ];
   } else if (role === 'auditor') {
     navItems = [
@@ -443,7 +437,6 @@ function renderSidebar() {
         `).join('')}
       </nav>
       <div class="sidebar-footer">
-        <button class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:8px;" onclick="openMobilePairingModal()">📱 Connect Phones</button>
         <button class="btn btn-danger btn-sm" style="width:100%" onclick="logout(true)">Logout</button>
       </div>
     </aside>
@@ -601,10 +594,6 @@ function renderLoginView(tab = 'login', prefillPhone = '') {
             <a class="auth-link" style="margin-left:4px;" onclick="renderLoginView('login')">Sign In with Credentials ➔</a>
           </div>
         `}
-      </div>
-
-      <div style="text-align: center; margin-top: 12px;">
-        <button class="btn btn-secondary btn-sm" onclick="openMobilePairingModal()">📱 Connect Mobile Phones (QR Code)</button>
       </div>
     </div>
   `;
@@ -872,7 +861,6 @@ async function renderAdminDashboard() {
         <p style="font-size:13px;color:var(--text-muted)">Live business metrics and field audit oversight</p>
       </div>
       <div class="top-actions">
-        <button class="btn btn-primary btn-sm" onclick="openMobilePairingModal()">📱 Mobile Pair (QR)</button>
         <button class="btn btn-secondary btn-sm" onclick="navigate('verifications')">🔍 Verify Bills (${stats.pendingBills})</button>
       </div>
     </div>
@@ -3418,55 +3406,8 @@ async function renderAuditLogsView() {
   `;
 }
 
-/* =========================================================================
-   MOBILE PAIRING MODAL (QR CODE GENERATOR FOR 5-6 PHONES)
-   ========================================================================= */
-
-async function openMobilePairingModal() {
-  const modalRoot = document.getElementById('modal-root');
-  let net = AppState.networkInfo;
-  try {
-    net = await API.get('/api/system/network-info');
-    AppState.networkInfo = net;
-  } catch (e) {
-    net = { primaryUrl: window.location.origin, mobileUrls: [window.location.origin] };
-  }
-
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(net.primaryUrl)}`;
-
-  modalRoot.innerHTML = `
-    <div class="modal-backdrop" onclick="closeModal()">
-      <div class="modal-content" style="max-width:480px;text-align:center;" onclick="event.stopPropagation()">
-        <div class="modal-header">
-          <div class="card-title">📱 Connect Mobile Phones</div>
-          <button class="modal-close" onclick="closeModal()">✕</button>
-        </div>
-
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
-          Make sure your phone is connected to the <b>same Wi-Fi</b> network as this PC, then scan this QR code with the phone camera:
-        </p>
-
-        <div style="background:#fff;padding:14px;border:1px solid var(--border);border-radius:var(--radius-md);display:inline-block;margin-bottom:12px;">
-          <img src="${qrUrl}" alt="Wi-Fi QR Code" style="width:200px;height:200px;display:block;">
-        </div>
-
-        <div class="qr-ip-box">
-          👉 <b>${net.primaryUrl}</b>
-        </div>
-
-        <div style="font-size:12px;color:var(--text-muted);text-align:left;background:#F8FAFC;padding:12px;border-radius:var(--radius-sm);">
-          <b>How to use on 5–6 phones:</b><br>
-          1. Open camera on each mobile phone and scan the QR above.<br>
-          2. Log in with Auditor accounts (<code>audit1 / audit123</code> or <code>audit2 / audit123</code>).<br>
-          3. Tap "Add to Home Screen" in mobile browser to use as a full-screen app!
-        </div>
-
-        <div style="margin-top:16px;">
-          <button class="btn btn-primary" style="width:100%;" onclick="closeModal()">Done</button>
-        </div>
-      </div>
-    </div>
-  `;
+function openMobilePairingModal() {
+  // Mobile pairing modal removed
 }
 
 // Fallback views for redemptions, settings, reports, mechanic dash
@@ -3674,18 +3615,17 @@ async function renderSettingsView() {
 
   main.innerHTML = `
     <div class="top-bar">
-      <h1 class="page-title">⚙️ Settings & Mobile Setup</h1>
+      <h1 class="page-title">⚙️ System Information</h1>
     </div>
 
     <div class="card">
-      <div class="card-title" style="margin-bottom:12px;">📱 Multi-Device Wi-Fi Connectivity</div>
+      <div class="card-title" style="margin-bottom:12px;">💻 System & Network Information</div>
       <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
-        Connect up to 5–6 mobile phones on your local Wi-Fi network for simultaneous field auditing and bill submission.
+        Local server network access details for Mahaveer Traders Loyalty System.
       </p>
-      <div class="qr-ip-box">
-        Primary LAN Address: <b>${net.primaryUrl}</b>
+      <div style="background:#F1F5F9;padding:12px;border-radius:var(--radius-sm);font-family:monospace;font-size:14px;margin:12px 0;">
+        Primary Server Address: <b>${net.primaryUrl || window.location.origin}</b>
       </div>
-      <button class="btn btn-primary" onclick="openMobilePairingModal()">Display Fullscreen QR Code</button>
     </div>
   `;
 }
