@@ -1323,7 +1323,34 @@ async function renderSubmitPurchase() {
           <div class="card-header" style="margin-bottom:8px;">
             <div class="card-title">📦 Products Purchased <span style="font-size:12px;color:var(--text-muted);font-weight:normal;">(Optional)</span></div>
           </div>
-          <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Optional: You can add product line items or skip this section.</p>
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">Optional: Choose from the catalog or type any custom item name in the text field if not in the dropdown menu.</p>
+          
+          <datalist id="common-units-list">
+            <option value="Piece">
+            <option value="Bag">
+            <option value="Meter">
+            <option value="Box">
+            <option value="Kg">
+            <option value="Liter">
+            <option value="Bundle">
+            <option value="Pair">
+            <option value="Set">
+            <option value="Foot">
+            <option value="Sq Ft">
+            <option value="Packet">
+            <option value="Roll">
+            <option value="Nos">
+            <option value="Length">
+          </datalist>
+
+          <div class="purchase-items-header">
+            <div>Catalog Dropdown</div>
+            <div>Item Name / Text Field</div>
+            <div>Quantity</div>
+            <div>Unit</div>
+            <div></div>
+          </div>
+
           <div id="items-container">
             <!-- Dynamic item rows -->
           </div>
@@ -1354,6 +1381,9 @@ async function renderSubmitPurchase() {
 
   // Store products for dynamic rows
   window._availableProducts = products;
+
+  // Add one empty product line row by default for convenience
+  addPurchaseItemRow();
 }
 
 let uploadedBillUrl = '';
@@ -1365,25 +1395,28 @@ function addPurchaseItemRow() {
 
   const div = document.createElement('div');
   div.id = rowId;
-  div.className = 'form-row';
-  div.style.marginBottom = '8px';
+  div.className = 'purchase-item-row';
   div.innerHTML = `
-    <div style="flex:2;">
+    <div class="col-prod">
       <select class="item-prod-select" onchange="handleProductSelected(this, '${rowId}')">
         <option value="">-- Choose Product (Optional) --</option>
         ${(window._availableProducts || []).map(p => `
-          <option value="${p.id}" data-unit="${p.unit}" data-name="${p.name}">${p.name} (${p.category})</option>
+          <option value="${p.id}" data-unit="${p.unit || 'Piece'}" data-name="${p.name}">${p.name} (${p.category})</option>
         `).join('')}
+        <option value="__custom__" data-unit="Piece" data-name="">✏️ Type Custom Item...</option>
       </select>
     </div>
-    <div style="flex:1;">
-      <input type="number" class="item-qty" placeholder="Quantity" min="0" step="any">
+    <div class="col-custom">
+      <input type="text" class="item-custom-name" placeholder="Item Name (or type custom item)" oninput="handleCustomNameInput(this, '${rowId}')">
     </div>
-    <div style="flex:0.8;">
-      <input type="text" class="item-unit" placeholder="Unit" readonly style="background:#F1F5F9;">
+    <div class="col-qty">
+      <input type="number" class="item-qty" placeholder="Qty" min="0.01" step="any" value="1">
     </div>
-    <div style="flex:0;">
-      <button type="button" class="btn btn-danger btn-sm" onclick="document.getElementById('${rowId}').remove()">✕</button>
+    <div class="col-unit">
+      <input type="text" class="item-unit" placeholder="Unit" list="common-units-list" value="Piece">
+    </div>
+    <div class="col-action">
+      <button type="button" class="btn btn-danger btn-sm" onclick="document.getElementById('${rowId}').remove()" title="Remove row" style="padding:6px 10px;line-height:1;">✕</button>
     </div>
   `;
   container.appendChild(div);
@@ -1393,8 +1426,50 @@ function handleProductSelected(selectEl, rowId) {
   const row = document.getElementById(rowId);
   if (!row) return;
   const opt = selectEl.options[selectEl.selectedIndex];
+  const nameInput = row.querySelector('.item-custom-name');
   const unitInput = row.querySelector('.item-unit');
-  unitInput.value = opt.getAttribute('data-unit') || 'Piece';
+
+  if (selectEl.value === '__custom__') {
+    if (nameInput) {
+      nameInput.value = '';
+      nameInput.focus();
+    }
+    if (unitInput && !unitInput.value) unitInput.value = 'Piece';
+  } else if (selectEl.value) {
+    const pName = opt.getAttribute('data-name') || opt.text;
+    const pUnit = opt.getAttribute('data-unit') || 'Piece';
+    if (nameInput) nameInput.value = pName;
+    if (unitInput) unitInput.value = pUnit;
+  }
+}
+
+function handleCustomNameInput(input, rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const selectEl = row.querySelector('.item-prod-select');
+  if (!selectEl) return;
+  
+  const val = input.value.trim().toLowerCase();
+  if (!val) return;
+
+  // Check if val matches an existing option
+  let matched = false;
+  for (let i = 0; i < selectEl.options.length; i++) {
+    const opt = selectEl.options[i];
+    const dataName = (opt.getAttribute('data-name') || '').toLowerCase();
+    if (dataName && dataName === val) {
+      selectEl.selectedIndex = i;
+      matched = true;
+      break;
+    }
+  }
+  if (!matched && selectEl.value && selectEl.value !== '__custom__') {
+    const opt = selectEl.options[selectEl.selectedIndex];
+    const dataName = (opt.getAttribute('data-name') || '').toLowerCase();
+    if (dataName !== val) {
+      selectEl.value = '__custom__';
+    }
+  }
 }
 
 function handleBillFileSelected(input) {
@@ -1451,20 +1526,44 @@ async function handlePurchaseSubmit(e) {
     return showToast('Customer Name is required', 'error');
   }
 
-  // Collect item rows (optional)
-  const itemRows = document.querySelectorAll('#items-container .form-row');
+  // Collect item rows (optional - can be catalog item or custom typed item)
+  const itemRows = document.querySelectorAll('#items-container .purchase-item-row, #items-container .form-row');
   const items = [];
   itemRows.forEach(row => {
     const sel = row.querySelector('.item-prod-select');
-    const qty = parseFloat(row.querySelector('.item-qty').value) || 1;
-    const unit = row.querySelector('.item-unit').value || 'Unit';
-    if (sel && sel.value) {
+    const customInp = row.querySelector('.item-custom-name');
+    const qtyInp = row.querySelector('.item-qty');
+    const unitInp = row.querySelector('.item-unit');
+
+    const qty = parseFloat(qtyInp ? qtyInp.value : 1) || 1;
+    const unit = (unitInp ? unitInp.value : 'Piece').trim() || 'Piece';
+
+    let productId = null;
+    let productName = '';
+
+    const typedName = customInp ? customInp.value.trim() : '';
+
+    if (typedName) {
+      productName = typedName;
+      if (sel && sel.value && sel.value !== '__custom__') {
+        const opt = sel.options[sel.selectedIndex];
+        const dataName = opt.getAttribute('data-name');
+        if (dataName && (dataName.toLowerCase() === typedName.toLowerCase() || opt.text.toLowerCase().includes(typedName.toLowerCase()))) {
+          productId = parseInt(sel.value, 10);
+        }
+      }
+    } else if (sel && sel.value && sel.value !== '__custom__') {
       const opt = sel.options[sel.selectedIndex];
+      productId = parseInt(sel.value, 10);
+      productName = opt.getAttribute('data-name') || opt.text;
+    }
+
+    if (productName) {
       items.push({
-        productId: parseInt(sel.value, 10),
-        productName: opt.getAttribute('data-name') || opt.text,
+        productId,
+        productName,
         quantity: qty,
-        unit: unit
+        unit
       });
     }
   });

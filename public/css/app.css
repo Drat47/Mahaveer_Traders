@@ -1137,6 +1137,68 @@ input:focus, select:focus, textarea:focus {
     font-size: 14px;
   }
 }
+/* Purchase Item Dynamic Rows with Custom Text Field */
+.purchase-items-header {
+  display: grid;
+  grid-template-columns: 1.3fr 1.6fr 80px 95px 36px;
+  gap: 8px;
+  padding: 0 4px 6px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
 
+.purchase-item-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1.6fr 80px 95px 36px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  background: var(--bg-card);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  transition: border-color 0.2s;
+}
 
+.purchase-item-row:focus-within {
+  border-color: var(--accent);
+}
 
+.purchase-item-row input,
+.purchase-item-row select {
+  font-size: 13px !important;
+  padding: 8px 10px;
+}
+
+@media (max-width: 640px) {
+  .purchase-items-header {
+    display: none;
+  }
+  .purchase-item-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 10px;
+    margin-bottom: 12px;
+    box-shadow: var(--shadow-sm);
+  }
+  .purchase-item-row .col-prod {
+    grid-column: 1 / -1;
+  }
+  .purchase-item-row .col-custom {
+    grid-column: 1 / -1;
+  }
+  .purchase-item-row .col-qty {
+    grid-column: 1 / 2;
+  }
+  .purchase-item-row .col-unit {
+    grid-column: 2 / 3;
+  }
+  .purchase-item-row .col-action {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+  }
+}
