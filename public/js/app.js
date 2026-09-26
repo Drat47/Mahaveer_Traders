@@ -101,6 +101,32 @@ function formatINR(val) {
   return '₹' + Number(val || 0).toLocaleString('en-IN');
 }
 
+// Universal Dropdown & Custom Text Sync Helper
+function handleDropdownWithCustom(selectEl, customInputId) {
+  const customInp = document.getElementById(customInputId);
+  if (!customInp) return;
+  if (selectEl.value === '__custom__') {
+    customInp.value = '';
+    customInp.focus();
+  } else if (selectEl.value) {
+    customInp.value = selectEl.options[selectEl.selectedIndex].text.replace(/\s*\(.*?\)\s*/g, '').trim() || selectEl.value;
+  }
+}
+
+// Searchable Mechanic Input Sync Helper
+function handlePurMechSearchInput(input) {
+  const query = input.value.trim().toLowerCase();
+  const selectEl = document.getElementById('pur-mechanic-id');
+  if (!selectEl || !query) return;
+  for (let i = 0; i < selectEl.options.length; i++) {
+    const opt = selectEl.options[i];
+    if (opt.text.toLowerCase().includes(query)) {
+      selectEl.selectedIndex = i;
+      break;
+    }
+  }
+}
+
 // Initialize App
 async function initApp() {
   renderShell();
@@ -565,9 +591,12 @@ function renderLoginView(tab = 'login', prefillPhone = '') {
 
             <div class="form-group">
               <label>Trade / Work Specialty <span style="color:var(--danger)">*</span></label>
-              <select id="signup-trade" required>
+              <select id="signup-trade" onchange="handleDropdownWithCustom(this, 'signup-trade-custom')">
+                <option value="">-- Choose Trade Category (Optional) --</option>
                 ${TRADE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+                <option value="__custom__">✏️ Other / Custom Trade (Type below)</option>
               </select>
+              <input type="text" id="signup-trade-custom" placeholder="Or type custom Trade / Specialty here..." style="margin-top:6px;">
             </div>
 
             <div class="form-group">
@@ -628,7 +657,9 @@ async function handleSignUpSubmit(e) {
   e.preventDefault();
   const name = document.getElementById('signup-name').value.trim();
   const phone = document.getElementById('signup-phone').value.trim();
-  const trade_type = document.getElementById('signup-trade').value;
+  const customTrade = document.getElementById('signup-trade-custom') ? document.getElementById('signup-trade-custom').value.trim() : '';
+  const selTrade = document.getElementById('signup-trade') ? document.getElementById('signup-trade').value : '';
+  const trade_type = customTrade || (selTrade && selTrade !== '__custom__' ? selTrade : 'Others');
   const address = document.getElementById('signup-addr').value.trim();
   const pw = document.getElementById('signup-pw').value;
   const confirmPw = document.getElementById('signup-confirm-pw').value;
@@ -1110,15 +1141,16 @@ function openAuditActionModal(purchaseId, action, totalAmount = 0) {
     bodyHtml = `
       <div class="form-group">
         <label>Rejection Reason (Required for Audit Trail)</label>
-        <select id="audit-reason-select" onchange="document.getElementById('audit-reason-custom').style.display = this.value === 'Other' ? 'block' : 'none'">
-          <option>Bill receipt unreadable / blurry photo</option>
-          <option>Customer denied making this purchase</option>
-          <option>Duplicate bill already processed</option>
-          <option>Invalid / non-registered store bill</option>
-          <option>Wrong product category billed</option>
-          <option>Other</option>
+        <select id="audit-reason-select" onchange="handleDropdownWithCustom(this, 'audit-reason-custom')">
+          <option value="">-- Choose Rejection Reason --</option>
+          <option value="Bill receipt unreadable / blurry photo">Bill receipt unreadable / blurry photo</option>
+          <option value="Customer denied making this purchase">Customer denied making this purchase</option>
+          <option value="Duplicate bill already processed">Duplicate bill already processed</option>
+          <option value="Invalid / non-registered store bill">Invalid / non-registered store bill</option>
+          <option value="Wrong product category billed">Wrong product category billed</option>
+          <option value="__custom__">✏️ Other Custom Reason (Type below)</option>
         </select>
-        <input type="text" id="audit-reason-custom" placeholder="Specify custom reason..." style="display:none;margin-top:6px;">
+        <input type="text" id="audit-reason-custom" placeholder="Or type custom rejection reason here..." style="margin-top:6px;">
       </div>
     `;
   } else if (action === 'CORRECTION') {
@@ -1155,9 +1187,9 @@ async function submitAuditAction(purchaseId, action) {
       if (isNaN(pts) || pts < 0) return showToast('Enter a valid points number', 'error');
       payload.points = pts;
     } else if (action === 'REJECT') {
-      const sel = document.getElementById('audit-reason-select').value;
-      const custom = document.getElementById('audit-reason-custom').value.trim();
-      payload.reason = sel === 'Other' ? custom : sel;
+      const sel = document.getElementById('audit-reason-select') ? document.getElementById('audit-reason-select').value : '';
+      const custom = document.getElementById('audit-reason-custom') ? document.getElementById('audit-reason-custom').value.trim() : '';
+      payload.reason = custom || (sel && sel !== '__custom__' ? sel : '');
       if (!payload.reason) return showToast('Rejection reason is required', 'error');
     } else if (action === 'CORRECTION') {
       const msg = document.getElementById('audit-correction-msg').value.trim();
@@ -1272,12 +1304,18 @@ async function renderSubmitPurchase() {
             <div class="card-title" style="margin-bottom:12px;">👷 Select Mechanic <span style="color:var(--danger)">*</span></div>
             <div class="form-group">
               <label>Mechanic Account <span style="color:var(--danger)">*</span></label>
-              <select id="pur-mechanic-id" required>
-                <option value="">-- Choose Mechanic --</option>
+              <select id="pur-mechanic-id" onchange="handleDropdownWithCustom(this, 'pur-mechanic-search')">
+                <option value="">-- Choose Mechanic from Dropdown --</option>
                 ${mechanics.filter(m => m.is_active).map(m => `
                   <option value="${m.id}">${m.name} (${m.uid} · ${m.trade_type} · ${m.phone})</option>
                 `).join('')}
               </select>
+              <input type="text" id="pur-mechanic-search" list="pur-mechanics-datalist" placeholder="Or type mechanic name, User ID (e.g. MEC1001), or phone..." style="margin-top:6px;" oninput="handlePurMechSearchInput(this)">
+              <datalist id="pur-mechanics-datalist">
+                ${mechanics.filter(m => m.is_active).map(m => `
+                  <option value="${m.name} (${m.uid} · ${m.phone})"></option>
+                `).join('')}
+              </datalist>
             </div>
           </div>
         ` : ''}
@@ -1367,8 +1405,9 @@ async function renderSubmitPurchase() {
     </div>
   `;
 
-  // Store products for dynamic rows
+  // Store products and mechanics for dynamic rows and search
   window._availableProducts = products;
+  window._availableMechanics = mechanics;
 
   // Add one empty product line row by default for convenience
   addPurchaseItemRow();
@@ -1495,10 +1534,23 @@ async function handlePurchaseSubmit(e) {
   const btn = document.getElementById('pur-submit-btn');
 
   const mechSelect = document.getElementById('pur-mechanic-id');
-  const mechanicId = mechSelect ? mechSelect.value : (AppState.user ? AppState.user.mechanicId : null);
+  const mechSearch = document.getElementById('pur-mechanic-search');
+  let mechanicId = mechSelect ? mechSelect.value : (AppState.user ? AppState.user.mechanicId : null);
+
+  if ((AppState.user.role === 'admin' || AppState.user.role === 'auditor') && (!mechanicId || mechanicId === '')) {
+    const query = mechSearch ? mechSearch.value.trim().toLowerCase() : '';
+    if (query) {
+      const match = (window._availableMechanics || []).find(m => 
+        m.name.toLowerCase().includes(query) || 
+        m.uid.toLowerCase().includes(query) || 
+        m.phone.includes(query)
+      );
+      if (match) mechanicId = match.id;
+    }
+  }
 
   if ((AppState.user.role === 'admin' || AppState.user.role === 'auditor') && !mechanicId) {
-    return showToast('Please select a mechanic', 'error');
+    return showToast('Please select or type a mechanic', 'error');
   }
 
   const purchaseDate = document.getElementById('pur-date').value;
@@ -1689,9 +1741,12 @@ function openAddMechanicModal() {
             </div>
             <div class="form-group">
               <label>Trade / Specialty</label>
-              <select id="new-m-type" required>
-                ${TRADE_TYPES.map(t => `<option>${t}</option>`).join('')}
+              <select id="new-m-type" onchange="handleDropdownWithCustom(this, 'new-m-type-custom')">
+                <option value="">-- Choose Trade --</option>
+                ${TRADE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+                <option value="__custom__">✏️ Other / Custom Trade (Type below)</option>
               </select>
+              <input type="text" id="new-m-type-custom" placeholder="Or type custom Trade / Specialty..." style="margin-top:6px;">
             </div>
           </div>
           <div class="form-group">
@@ -1720,10 +1775,14 @@ function openAddMechanicModal() {
 
 async function handleAddMechanicSubmit(e) {
   e.preventDefault();
+  const customTrade = document.getElementById('new-m-type-custom') ? document.getElementById('new-m-type-custom').value.trim() : '';
+  const selTrade = document.getElementById('new-m-type') ? document.getElementById('new-m-type').value : '';
+  const trade_type = customTrade || (selTrade && selTrade !== '__custom__' ? selTrade : 'Others');
+
   const payload = {
     name: document.getElementById('new-m-name').value.trim(),
     phone: document.getElementById('new-m-phone').value.trim(),
-    trade_type: document.getElementById('new-m-type').value,
+    trade_type: trade_type,
     address: document.getElementById('new-m-addr').value.trim(),
     uid: document.getElementById('new-m-uid').value.trim(),
     password: document.getElementById('new-m-pw').value
@@ -2073,13 +2132,15 @@ function openAdjustPointsModal(mechId, mechName) {
           </div>
           <div class="form-group">
             <label>Adjustment Reason</label>
-            <select id="adj-reason">
-              <option>Promotional Bonus</option>
-              <option>Correction for Audit Discrepancy</option>
-              <option>Customer Service Adjustment</option>
-              <option>System Error Resolution</option>
-              <option>Other</option>
+            <select id="adj-reason" onchange="handleDropdownWithCustom(this, 'adj-reason-custom')">
+              <option value="Promotional Bonus">Promotional Bonus</option>
+              <option value="Correction for Audit Discrepancy">Correction for Audit Discrepancy</option>
+              <option value="Customer Service Adjustment">Customer Service Adjustment</option>
+              <option value="System Error Resolution">System Error Resolution</option>
+              <option value="Special Performance Incentive">Special Performance Incentive</option>
+              <option value="__custom__">✏️ Other Custom Reason (Type below)</option>
             </select>
+            <input type="text" id="adj-reason-custom" placeholder="Or type custom adjustment reason..." style="margin-top:6px;">
           </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
             <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
@@ -2094,7 +2155,9 @@ function openAdjustPointsModal(mechId, mechName) {
 async function handleAdjustPointsSubmit(e, mechId) {
   e.preventDefault();
   const pts = parseInt(document.getElementById('adj-points').value, 10);
-  const reason = document.getElementById('adj-reason').value;
+  const customReason = document.getElementById('adj-reason-custom') ? document.getElementById('adj-reason-custom').value.trim() : '';
+  const selReason = document.getElementById('adj-reason') ? document.getElementById('adj-reason').value : '';
+  const reason = customReason || (selReason && selReason !== '__custom__' ? selReason : 'Admin Adjustment');
 
   try {
     await API.post(`/api/mechanics/${mechId}/adjust-points`, { points: pts, reason });
