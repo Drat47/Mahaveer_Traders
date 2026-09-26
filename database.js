@@ -81,8 +81,9 @@ function initDatabase() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       points_required INTEGER NOT NULL,
-      stock INTEGER NOT NULL DEFAULT 0,
+      stock INTEGER NOT NULL DEFAULT 999,
       eligible_types TEXT NOT NULL, -- JSON array string e.g. ["Plumber","Painters"] or ["all"]
+      image_url TEXT,
       is_active INTEGER DEFAULT 1
     );
 
@@ -181,6 +182,12 @@ function initDatabase() {
     } catch (e) {
       // Column already exists
     }
+  }
+
+  try {
+    db.exec(`ALTER TABLE rewards ADD COLUMN image_url TEXT;`);
+  } catch (e) {
+    // Column already exists
   }
 
   // Insert default settings if not exists

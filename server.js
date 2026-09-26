@@ -1184,13 +1184,16 @@ const server = http.createServer(async (req, res) => {
       const user = authenticate(req);
       if (!user || user.role !== 'admin') return sendError('Forbidden', 403);
       const body = await parseJsonBody(req);
-      const { name, pointsRequired, stock, eligibleTypes } = body;
+      const { name, pointsRequired, stock, eligibleTypes, imageUrl, image_url } = body;
 
       if (!name || !pointsRequired) return sendError('Reward name and required points are required', 400);
 
+      const img = (imageUrl || image_url || '').trim();
       const typesJson = JSON.stringify(eligibleTypes && eligibleTypes.length ? eligibleTypes : ['all']);
-      const result = db.prepare("INSERT INTO rewards (name, points_required, stock, eligible_types, is_active) VALUES (?, ?, ?, ?, 1)")
-        .run(name.trim(), parseInt(pointsRequired, 10), parseInt(stock, 10) || 0, typesJson);
+      const stockVal = stock !== undefined && stock !== null ? parseInt(stock, 10) : 999;
+
+      const result = db.prepare("INSERT INTO rewards (name, points_required, stock, eligible_types, image_url, is_active) VALUES (?, ?, ?, ?, ?, 1)")
+        .run(name.trim(), parseInt(pointsRequired, 10), stockVal, typesJson, img || null);
 
       logAudit(user.name, user.role, 'Add Reward', `Created reward ${name} for ${pointsRequired} pts`, req);
       return sendJson({ success: true, id: Number(result.lastInsertRowid) });
@@ -1218,18 +1221,20 @@ const server = http.createServer(async (req, res) => {
       if (!rew) return sendError('Reward not found', 404);
 
       const body = await parseJsonBody(req);
-      const { name, pointsRequired, stock, eligibleTypes } = body;
+      const { name, pointsRequired, stock, eligibleTypes, imageUrl, image_url } = body;
       const typesJson = JSON.stringify(eligibleTypes && eligibleTypes.length ? eligibleTypes : ['all']);
+      const img = imageUrl !== undefined ? imageUrl : (image_url !== undefined ? image_url : rew.image_url);
 
       db.prepare(`
         UPDATE rewards 
-        SET name = ?, points_required = ?, stock = ?, eligible_types = ?
+        SET name = ?, points_required = ?, stock = ?, eligible_types = ?, image_url = ?
         WHERE id = ?
       `).run(
         name ? name.trim() : rew.name,
         pointsRequired !== undefined ? parseInt(pointsRequired, 10) : rew.points_required,
         stock !== undefined ? parseInt(stock, 10) : rew.stock,
         typesJson,
+        img || null,
         id
       );
 

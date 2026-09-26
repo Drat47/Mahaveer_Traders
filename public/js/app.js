@@ -2817,6 +2817,55 @@ async function renderRewardsView() {
   `;
 }
 
+let uploadedRewardImageUrl = '';
+
+function handleRewardImageSelected(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  const placeholder = document.getElementById('reward-img-placeholder');
+  const previewDiv = document.getElementById('reward-img-preview');
+  const previewImg = document.getElementById('reward-preview-img');
+
+  if (placeholder) placeholder.innerHTML = `<p style="font-size:12px;color:var(--text-muted)">Uploading image...</p>`;
+
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    try {
+      const res = await API.post('/api/upload', { dataUrl, filename: file.name });
+      uploadedRewardImageUrl = res.fileUrl;
+      if (previewImg) previewImg.src = uploadedRewardImageUrl;
+      if (placeholder) placeholder.style.display = 'none';
+      if (previewDiv) previewDiv.style.display = 'block';
+      showToast('Image uploaded ready', 'success');
+    } catch (err) {
+      if (placeholder) {
+        placeholder.style.display = 'block';
+        placeholder.innerHTML = `<p style="color:var(--danger);font-size:12px;">Upload failed: ${err.message}</p>`;
+      }
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeRewardImage() {
+  uploadedRewardImageUrl = '';
+  const fileInput = document.getElementById('reward-file-input');
+  if (fileInput) fileInput.value = '';
+  const placeholder = document.getElementById('reward-img-placeholder');
+  const previewDiv = document.getElementById('reward-img-preview');
+  if (placeholder) {
+    placeholder.style.display = 'block';
+    placeholder.innerHTML = `
+      <div style="font-size:32px;margin-bottom:4px;">📷</div>
+      <div style="font-size:13px;font-weight:600;color:var(--accent);">Click or Tap to Upload Image</div>
+      <small style="color:var(--text-muted);font-size:11px;">Supports PNG, JPG, JPEG, WebP</small>
+    `;
+  }
+  if (previewDiv) previewDiv.style.display = 'none';
+}
+
 function renderRewardsCardsHtml(rewardsList, isMechanic, isAdmin, mechPoints, mechTrade) {
   if (!rewardsList || rewardsList.length === 0) {
     return `
@@ -2831,19 +2880,30 @@ function renderRewardsCardsHtml(rewardsList, isMechanic, isAdmin, mechPoints, me
 
   return rewardsList.map(r => {
     const isAll = (r.eligible_types || []).includes('all');
-    const isEligible = isMechanic ? ((isAll || (r.eligible_types || []).includes(mechTrade)) && mechPoints >= r.points_required && r.stock > 0) : true;
+    const isEligible = isMechanic ? ((isAll || (r.eligible_types || []).includes(mechTrade)) && mechPoints >= r.points_required) : true;
     
     return `
       <div class="card reward-item-card" data-eligible='${JSON.stringify(r.eligible_types || ["all"])}' style="display:flex;flex-direction:column;justify-content:space-between;border-top:3px solid ${r.is_active ? 'var(--accent)' : 'var(--border)'};">
         <div>
+          <!-- Reward Image / Visual Icon -->
+          <div class="reward-card-image-wrap">
+            ${r.image_url ? `
+              <img src="${r.image_url}" class="reward-card-img" alt="${r.name}">
+            ` : `
+              <div class="reward-card-fallback-icon">🎁</div>
+            `}
+          </div>
+
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
             <h3 style="font-size:16px;font-weight:700;color:var(--primary);margin:0;">${r.name}</h3>
-            <span class="badge ${r.stock > 0 ? (r.is_active ? 'badge-active' : 'badge-inactive') : 'badge-inactive'}">
-              ${r.stock > 0 ? `${r.stock} in stock` : 'Out of Stock'}
-            </span>
+            ${isAdmin ? `
+              <span class="badge ${r.is_active ? 'badge-active' : 'badge-inactive'}">
+                ${r.is_active ? 'Active' : 'Inactive'}
+              </span>
+            ` : ''}
           </div>
           
-          <div style="margin:14px 0;">
+          <div style="margin:10px 0;">
             <span style="font-size:24px;font-weight:800;color:var(--accent);">${r.points_required.toLocaleString()}</span>
             <span style="font-size:13px;color:var(--text-muted);font-weight:600;margin-left:4px;">Points</span>
           </div>
@@ -2870,13 +2930,13 @@ function renderRewardsCardsHtml(rewardsList, isMechanic, isAdmin, mechPoints, me
 
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
           ${isMechanic ? `
-            <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name}')">
-              ${r.stock < 1 ? 'Out of Stock' : mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
+            <button class="btn btn-primary" style="width:100%;" ${!isEligible ? 'disabled' : ''} onclick="handleRedeemRequest(${r.id}, '${r.name.replace(/'/g, "\\'")}')">
+              ${mechPoints < r.points_required ? `Need ${r.points_required - mechPoints} more pts` : 'Claim Reward'}
             </button>
           ` : `
             <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
               <div style="display:flex;gap:6px;">
-                <button class="btn btn-secondary btn-sm" onclick="openEditRewardModal(${r.id}, '${r.name.replace(/'/g, "\\'")}', ${r.points_required}, ${r.stock}, ${JSON.stringify(r.eligible_types).replace(/"/g, '&quot;')})">✏️ Edit Visibility</button>
+                <button class="btn btn-secondary btn-sm" onclick="openEditRewardModal(${r.id}, '${r.name.replace(/'/g, "\\'")}', ${r.points_required}, '${(r.image_url || '').replace(/'/g, "\\'")}', ${JSON.stringify(r.eligible_types).replace(/"/g, '&quot;')})">✏️ Edit</button>
                 <button class="btn btn-secondary btn-sm" onclick="toggleRewardActive(${r.id})">${r.is_active ? 'Deactivate' : 'Activate'}</button>
               </div>
               <button class="btn btn-danger btn-sm" onclick="deleteReward(${r.id}, '${r.name.replace(/'/g, "\\'")}')" title="Delete reward">🗑️</button>
@@ -2914,8 +2974,9 @@ function filterAdminRewards(category) {
   }
 }
 
-// Modal: Add Reward Item with Visibility Options
+// Modal: Add Reward Item (With Photo Upload & Without Stock Quantity)
 function openAddRewardModal() {
+  uploadedRewardImageUrl = '';
   const modalRoot = document.getElementById('modal-root');
   modalRoot.innerHTML = `
     <div class="modal-backdrop" onclick="closeModal()">
@@ -2930,14 +2991,29 @@ function openAddRewardModal() {
             <input type="text" id="new-reward-name" required placeholder="e.g. Prestige Induction Cooktop, Professional Toolkit, Mixer Grinder...">
           </div>
           
-          <div class="form-row">
-            <div class="form-group">
-              <label>Points Required <span style="color:var(--danger)">*</span></label>
-              <input type="number" id="new-reward-points" required min="1" placeholder="e.g. 500">
-            </div>
-            <div class="form-group">
-              <label>Stock Quantity <span style="color:var(--danger)">*</span></label>
-              <input type="number" id="new-reward-stock" required min="0" value="5" placeholder="e.g. 10">
+          <div class="form-group">
+            <label>Points Required <span style="color:var(--danger)">*</span></label>
+            <input type="number" id="new-reward-points" required min="1" placeholder="e.g. 500">
+          </div>
+
+          <!-- Reward Image Upload (Without Name Tag) -->
+          <div class="form-group">
+            <label>Reward Product Photo (Optional)</label>
+            <div class="reward-image-upload-box" onclick="document.getElementById('reward-file-input').click()" style="cursor:pointer;">
+              <input type="file" id="reward-file-input" accept="image/*" style="display:none;" onchange="handleRewardImageSelected(this)">
+              <div id="reward-img-preview-container" style="text-align:center;padding:14px;border:2px dashed var(--border);border-radius:var(--radius-md);background:#F8FAFC;transition:all 0.2s;">
+                <div id="reward-img-placeholder">
+                  <div style="font-size:32px;margin-bottom:4px;">📷</div>
+                  <div style="font-size:13px;font-weight:600;color:var(--accent);">Click or Tap to Upload Image</div>
+                  <small style="color:var(--text-muted);font-size:11px;">Select a product image from your phone/computer</small>
+                </div>
+                <div id="reward-img-preview" style="display:none;position:relative;">
+                  <img id="reward-preview-img" src="" style="max-height:160px;max-width:100%;border-radius:var(--radius-sm);object-fit:contain;box-shadow:var(--shadow-sm);">
+                  <div style="margin-top:6px;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); removeRewardImage();">✕ Change Image</button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2994,7 +3070,6 @@ async function handleAddRewardSubmit(e) {
   const btn = document.getElementById('save-reward-btn');
   const name = document.getElementById('new-reward-name').value.trim();
   const pointsRequired = parseInt(document.getElementById('new-reward-points').value, 10);
-  const stock = parseInt(document.getElementById('new-reward-stock').value, 10);
 
   const visMode = document.querySelector('input[name="add-reward-vis"]:checked')?.value || 'all';
   let eligibleTypes = ['all'];
@@ -3018,10 +3093,11 @@ async function handleAddRewardSubmit(e) {
     await API.post('/api/rewards', {
       name,
       pointsRequired,
-      stock: isNaN(stock) ? 0 : stock,
+      imageUrl: uploadedRewardImageUrl,
       eligibleTypes
     });
     showToast(`Reward "${name}" added to catalog successfully!`, 'success');
+    uploadedRewardImageUrl = '';
     closeModal();
     renderRewardsView();
   } catch (err) {
@@ -3030,8 +3106,9 @@ async function handleAddRewardSubmit(e) {
   }
 }
 
-// Modal: Edit Reward Item with Visibility Options
-function openEditRewardModal(id, currentName, currentPoints, currentStock, currentEligible) {
+// Modal: Edit Reward Item (Without Stock Quantity & With Photo Support)
+function openEditRewardModal(id, currentName, currentPoints, currentImageUrl, currentEligible) {
+  uploadedRewardImageUrl = currentImageUrl || '';
   const modalRoot = document.getElementById('modal-root');
   let elig = currentEligible || ['all'];
   if (typeof elig === 'string') {
@@ -3052,14 +3129,29 @@ function openEditRewardModal(id, currentName, currentPoints, currentStock, curre
             <input type="text" id="edit-reward-name" required value="${currentName}">
           </div>
           
-          <div class="form-row">
-            <div class="form-group">
-              <label>Points Required <span style="color:var(--danger)">*</span></label>
-              <input type="number" id="edit-reward-points" required min="1" value="${currentPoints}">
-            </div>
-            <div class="form-group">
-              <label>Stock Quantity <span style="color:var(--danger)">*</span></label>
-              <input type="number" id="edit-reward-stock" required min="0" value="${currentStock}">
+          <div class="form-group">
+            <label>Points Required <span style="color:var(--danger)">*</span></label>
+            <input type="number" id="edit-reward-points" required min="1" value="${currentPoints}">
+          </div>
+
+          <!-- Reward Image Upload (Without Name Tag) -->
+          <div class="form-group">
+            <label>Reward Product Photo</label>
+            <div class="reward-image-upload-box" onclick="document.getElementById('reward-file-input').click()" style="cursor:pointer;">
+              <input type="file" id="reward-file-input" accept="image/*" style="display:none;" onchange="handleRewardImageSelected(this)">
+              <div id="reward-img-preview-container" style="text-align:center;padding:14px;border:2px dashed var(--border);border-radius:var(--radius-md);background:#F8FAFC;transition:all 0.2s;">
+                <div id="reward-img-placeholder" style="${currentImageUrl ? 'display:none;' : 'display:block;'}">
+                  <div style="font-size:32px;margin-bottom:4px;">📷</div>
+                  <div style="font-size:13px;font-weight:600;color:var(--accent);">Click or Tap to Upload Image</div>
+                  <small style="color:var(--text-muted);font-size:11px;">Select a product image</small>
+                </div>
+                <div id="reward-img-preview" style="${currentImageUrl ? 'display:block;' : 'display:none;'}position:relative;">
+                  <img id="reward-preview-img" src="${currentImageUrl || ''}" style="max-height:160px;max-width:100%;border-radius:var(--radius-sm);object-fit:contain;box-shadow:var(--shadow-sm);">
+                  <div style="margin-top:6px;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); removeRewardImage();">✕ Change Image</button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -3116,7 +3208,6 @@ async function handleEditRewardSubmit(e, id) {
   const btn = document.getElementById('edit-reward-btn');
   const name = document.getElementById('edit-reward-name').value.trim();
   const pointsRequired = parseInt(document.getElementById('edit-reward-points').value, 10);
-  const stock = parseInt(document.getElementById('edit-reward-stock').value, 10);
 
   const visMode = document.querySelector('input[name="edit-reward-vis"]:checked')?.value || 'all';
   let eligibleTypes = ['all'];
@@ -3136,10 +3227,11 @@ async function handleEditRewardSubmit(e, id) {
     await API.patch(`/api/rewards/${id}`, {
       name,
       pointsRequired,
-      stock,
+      imageUrl: uploadedRewardImageUrl,
       eligibleTypes
     });
     showToast(`Reward "${name}" updated successfully!`, 'success');
+    uploadedRewardImageUrl = '';
     closeModal();
     renderRewardsView();
   } catch (err) {

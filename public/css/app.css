@@ -646,6 +646,41 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: 10px;
 }
 
+/* Rewards Image & Card Enhancements */
+.reward-card-image-wrap {
+  width: 100%;
+  height: 160px;
+  background: #F8FAFC;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+
+.reward-card-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform 0.2s ease;
+}
+
+.reward-item-card:hover .reward-card-img {
+  transform: scale(1.04);
+}
+
+.reward-card-fallback-icon {
+  font-size: 48px;
+  opacity: 0.85;
+}
+
+.reward-image-upload-box:hover #reward-img-preview-container {
+  border-color: var(--accent);
+  background: #EFF6FF;
+}
+
 /* Mobile App Header (Top Bar on Phones) */
 .mobile-header {
   display: none;
