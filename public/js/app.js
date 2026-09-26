@@ -629,7 +629,7 @@ async function renderAdminDashboard() {
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;">
+    <div class="grid-2col" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;width:100%;">
       <div class="card">
         <div class="card-header">
           <div class="card-title">Trade Category Revenue Breakdown</div>
