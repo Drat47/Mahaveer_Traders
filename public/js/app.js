@@ -497,37 +497,112 @@ function renderBottomNav() {
 }
 
 /* =========================================================================
-   AUTH & LOGIN VIEW
+   AUTH, SIGN UP & PASSWORD RESET (WITH MOBILE OTP)
    ========================================================================= */
 
-function renderLoginView() {
+let activeAuthTab = 'login';
+
+function renderLoginView(tab = 'login', prefillPhone = '') {
+  activeAuthTab = tab;
   const main = document.getElementById('main-content');
   document.getElementById('sidebar-slot').innerHTML = '';
   document.getElementById('bottom-nav-slot').innerHTML = '';
+  const mobileHeader = document.getElementById('mobile-header-slot');
+  if (mobileHeader) mobileHeader.innerHTML = '';
+  const mobileDrawer = document.getElementById('mobile-drawer-slot');
+  if (mobileDrawer) mobileDrawer.innerHTML = '';
 
   main.innerHTML = `
-    <div style="max-width: 440px; margin: 4vh auto; padding: 12px;">
-      <div class="card" style="padding: 28px; box-shadow: var(--shadow-lg);">
-        <div style="text-align: center; margin-bottom: 24px;">
-          <div style="font-size: 40px; margin-bottom: 8px;">🏪</div>
+    <div style="max-width: 460px; margin: 3vh auto; padding: 12px;">
+      <div class="card" style="padding: 24px; box-shadow: var(--shadow-lg);">
+        <div style="text-align: center; margin-bottom: 20px;">
+          <div style="font-size: 38px; margin-bottom: 6px;">🏪</div>
           <h2 style="font-size: 22px; font-weight: 700; color: var(--primary);">Mahaveer Traders</h2>
-          <p style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Mechanic Loyalty & Field Audit System</p>
+          <p style="font-size: 13px; color: var(--text-muted); margin-top: 2px;">Mechanic Loyalty & Field Audit System</p>
         </div>
 
         <button type="button" class="btn btn-success" id="pwa-install-banner-btn" style="width:100%;margin-bottom:14px;" onclick="triggerPwaInstall()">📲 Install App on Phone (1-Tap)</button>
 
-        <form id="login-form" onsubmit="handleLoginSubmit(event)">
-          <div class="form-group">
-            <label>Username / User ID</label>
-            <input type="text" id="login-username" placeholder="e.g. admin, audit1, MEC1001" required autocomplete="username">
+        <!-- Auth Tabs: Sign In / Sign Up -->
+        <div class="auth-tab-group">
+          <button type="button" class="auth-tab-btn ${activeAuthTab === 'login' ? 'active' : ''}" onclick="renderLoginView('login')">
+            🔐 Sign In
+          </button>
+          <button type="button" class="auth-tab-btn ${activeAuthTab === 'signup' ? 'active' : ''}" onclick="renderLoginView('signup')">
+            📝 New Sign Up
+          </button>
+        </div>
+
+        ${activeAuthTab === 'login' ? `
+          <!-- Sign In Form -->
+          <form id="login-form" onsubmit="handleLoginSubmit(event)">
+            <div class="form-group">
+              <label>Mobile Number or Username</label>
+              <input type="text" id="login-username" value="${prefillPhone}" placeholder="10-digit mobile or User ID (e.g. 9876510001 / MEC1001)" required autocomplete="username">
+            </div>
+            
+            <div class="form-group">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <label style="margin-bottom:0;">Password</label>
+                <a class="auth-link" style="font-size:12px;" onclick="openForgotPasswordModal(document.getElementById('login-username').value)">Forgot Password?</a>
+              </div>
+              <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password">
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-lg" id="login-btn" style="margin-top:6px;">Secure Login</button>
+          </form>
+
+          <div style="text-align: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
+            <span style="font-size:13px;color:var(--text-muted);">New worker or contractor?</span>
+            <a class="auth-link" style="margin-left:4px;" onclick="renderLoginView('signup')">Sign Up for Rewards ➔</a>
           </div>
-          <div class="form-group">
-            <label>Password</label>
-            <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password">
+        ` : `
+          <!-- Sign Up Form (New Worker Self-Registration) -->
+          <form id="signup-form" onsubmit="handleSignUpSubmit(event)">
+            <div class="form-group">
+              <label>Full Name <span style="color:var(--danger)">*</span></label>
+              <input type="text" id="signup-name" placeholder="e.g. Ramesh Kumar" required autocomplete="name">
+            </div>
+
+            <div class="form-group">
+              <label>10-Digit Mobile Number <span style="color:var(--danger)">*</span></label>
+              <input type="tel" id="signup-phone" pattern="[0-9]{10}" placeholder="e.g. 9876543210" required autocomplete="tel">
+              <small style="color:var(--text-muted);font-size:11px;">You will use this mobile number to log in and receive points alerts.</small>
+            </div>
+
+            <div class="form-group">
+              <label>Trade / Work Specialty <span style="color:var(--danger)">*</span></label>
+              <select id="signup-trade" required>
+                ${TRADE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Shop Location / Work Area</label>
+              <input type="text" id="signup-addr" placeholder="e.g. Boring Road, Patna" autocomplete="street-address">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label>Create Password <span style="color:var(--danger)">*</span></label>
+                <input type="password" id="signup-pw" placeholder="Min 4 characters" minlength="4" required autocomplete="new-password">
+              </div>
+              <div class="form-group">
+                <label>Confirm Password <span style="color:var(--danger)">*</span></label>
+                <input type="password" id="signup-confirm-pw" placeholder="Re-enter password" minlength="4" required autocomplete="new-password">
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-lg" id="signup-btn" style="margin-top:6px;">Create Account & Sign In</button>
+          </form>
+
+          <div style="text-align: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
+            <span style="font-size:13px;color:var(--text-muted);">Already registered?</span>
+            <a class="auth-link" style="margin-left:4px;" onclick="renderLoginView('login')">Sign In with Credentials ➔</a>
           </div>
-          <button type="submit" class="btn btn-primary btn-lg" id="login-btn">Secure Login</button>
-        </form>
+        `}
       </div>
+
       <div style="text-align: center; margin-top: 12px;">
         <button class="btn btn-secondary btn-sm" onclick="openMobilePairingModal()">📱 Connect Mobile Phones (QR Code)</button>
       </div>
@@ -535,6 +610,7 @@ function renderLoginView() {
   `;
 }
 
+// Handle Sign In Submit
 async function handleLoginSubmit(e) {
   e.preventDefault();
   const u = document.getElementById('login-username').value.trim();
@@ -558,6 +634,216 @@ async function handleLoginSubmit(e) {
   }
 }
 
+// Handle Sign Up Submit
+async function handleSignUpSubmit(e) {
+  e.preventDefault();
+  const name = document.getElementById('signup-name').value.trim();
+  const phone = document.getElementById('signup-phone').value.trim();
+  const trade_type = document.getElementById('signup-trade').value;
+  const address = document.getElementById('signup-addr').value.trim();
+  const pw = document.getElementById('signup-pw').value;
+  const confirmPw = document.getElementById('signup-confirm-pw').value;
+  const btn = document.getElementById('signup-btn');
+
+  if (phone.replace(/[^0-9]/g, '').length !== 10) {
+    return showToast('Please enter a valid 10-digit mobile number', 'error');
+  }
+
+  if (pw !== confirmPw) {
+    return showToast('Passwords do not match. Please re-enter.', 'error');
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Creating Account...';
+
+  try {
+    const res = await API.post('/api/auth/signup', {
+      name,
+      phone,
+      trade_type,
+      address,
+      password: pw
+    });
+
+    AppState.token = res.token;
+    AppState.user = res.user;
+    localStorage.setItem('mech_audit_token', res.token);
+    showToast(res.message || 'Account created successfully!', 'success');
+    startAutoSync();
+    navigate('dash');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Create Account & Sign In';
+  }
+}
+
+// Modal: Forgot Password / Reset via Mobile OTP
+let resetOtpState = {
+  phone: '',
+  otp: '',
+  expiresAt: null
+};
+
+function openForgotPasswordModal(initialPhone = '') {
+  const cleanInitialPhone = (initialPhone || '').replace(/[^0-9]/g, '');
+  const modalRoot = document.getElementById('modal-root');
+  
+  modalRoot.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="modal-content" style="max-width:480px;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="card-title">🔑 Reset Password via Mobile OTP</div>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+
+        <div id="forgot-pw-step-1">
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+            Enter your registered 10-digit mobile number. We will send a secure 6-digit OTP to verify your identity.
+          </p>
+          <form onsubmit="handleSendOtpSubmit(event)">
+            <div class="form-group">
+              <label>Registered Mobile Number</label>
+              <input type="tel" id="reset-phone-input" pattern="[0-9]{10}" value="${cleanInitialPhone}" placeholder="10-digit mobile number" required autofocus>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+              <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="send-otp-btn">📨 Send Verification OTP</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="forgot-pw-step-2" style="display:none;">
+          <!-- Populated after OTP is generated -->
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Send OTP
+async function handleSendOtpSubmit(e) {
+  e.preventDefault();
+  const phoneInput = document.getElementById('reset-phone-input');
+  const phone = phoneInput ? phoneInput.value.trim() : '';
+  const btn = document.getElementById('send-otp-btn');
+
+  if (phone.replace(/[^0-9]/g, '').length !== 10) {
+    return showToast('Please enter a valid 10-digit mobile number', 'error');
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Sending OTP...';
+
+  try {
+    const res = await API.post('/api/auth/forgot-password/send-otp', { phone });
+    resetOtpState = {
+      phone: res.phone,
+      otp: res.otp,
+      expiresAt: res.expiresAt
+    };
+
+    showToast(res.message, 'success');
+    renderOtpVerifyStep(res);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '📨 Send Verification OTP';
+  }
+}
+
+// Render Step 2: OTP Verification & New Password
+function renderOtpVerifyStep(resData) {
+  const step1 = document.getElementById('forgot-pw-step-1');
+  const step2 = document.getElementById('forgot-pw-step-2');
+  if (step1) step1.style.display = 'none';
+  if (!step2) return;
+
+  step2.style.display = 'block';
+  step2.innerHTML = `
+    <div style="background:#EFF6FF;border:1px solid #BFDBFE;padding:12px;border-radius:var(--radius-sm);margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:#1E40AF;">✓ OTP Sent to +91 ${resData.phone}</div>
+      <div style="font-size:12px;color:#1E40AF;margin-top:2px;">
+        Account: <b>${resData.userName}</b>. Valid for 10 minutes.
+      </div>
+    </div>
+
+    <!-- Live OTP Display Box for Instant Testing & Mobile WhatsApp link -->
+    <div class="otp-box">
+      <div style="font-size:11px;color:#166534;font-weight:600;text-transform:uppercase;">Your 6-Digit OTP Code</div>
+      <div class="otp-display-val" id="display-otp">${resData.otp}</div>
+      <div style="display:flex;justify-content:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-success btn-sm" onclick="autoFillOtp('${resData.otp}')">⚡ Auto-Fill OTP</button>
+        <a href="${resData.whatsappUrl}" target="_blank" class="btn btn-secondary btn-sm" style="background:#DCFCE7;color:#166534;">💬 Open WhatsApp</a>
+      </div>
+    </div>
+
+    <form onsubmit="handleVerifyOtpSubmit(event)">
+      <div class="form-group">
+        <label>Enter 6-Digit OTP Code <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="verify-otp-input" pattern="[0-9]{6}" maxlength="6" placeholder="e.g. 123456" required style="font-size:18px;letter-spacing:4px;text-align:center;font-weight:700;">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>New Password <span style="color:var(--danger)">*</span></label>
+          <input type="password" id="new-password-input" minlength="4" placeholder="Min 4 chars" required autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label>Confirm Password <span style="color:var(--danger)">*</span></label>
+          <input type="password" id="confirm-new-password-input" minlength="4" placeholder="Re-enter password" required autocomplete="new-password">
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;flex-wrap:wrap;gap:8px;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="openForgotPasswordModal('${resData.phone}')">← Resend OTP</button>
+        <button type="submit" class="btn btn-primary" id="reset-submit-btn">🔐 Set New Password</button>
+      </div>
+    </form>
+  `;
+}
+
+function autoFillOtp(otp) {
+  const input = document.getElementById('verify-otp-input');
+  if (input) {
+    input.value = otp;
+    showToast('OTP auto-filled!', 'info');
+  }
+}
+
+// Verify OTP and Complete Password Reset
+async function handleVerifyOtpSubmit(e) {
+  e.preventDefault();
+  const otpInput = document.getElementById('verify-otp-input');
+  const newPwInput = document.getElementById('new-password-input');
+  const confirmPwInput = document.getElementById('confirm-new-password-input');
+  const btn = document.getElementById('reset-submit-btn');
+
+  const otp = otpInput ? otpInput.value.trim() : '';
+  const newPassword = newPwInput ? newPwInput.value : '';
+  const confirmPassword = confirmPwInput ? confirmPwInput.value : '';
+
+  if (newPassword !== confirmPassword) {
+    return showToast('New passwords do not match. Please re-enter.', 'error');
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Updating Password...';
+
+  try {
+    const res = await API.post('/api/auth/forgot-password/verify-otp', {
+      phone: resetOtpState.phone,
+      otp,
+      newPassword
+    });
+
+    showToast(res.message || 'Password reset successfully!', 'success');
+    closeModal();
+    renderLoginView('login', resetOtpState.phone);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '🔐 Set New Password';
+  }
+}
+
 async function logout(callApi = true) {
   if (callApi && AppState.token) {
     try { await API.post('/api/auth/logout', {}); } catch (e) {}
@@ -566,7 +852,7 @@ async function logout(callApi = true) {
   AppState.user = null;
   localStorage.removeItem('mech_audit_token');
   if (AppState.pollTimer) clearInterval(AppState.pollTimer);
-  navigate('login');
+  renderLoginView('login');
   showToast('Logged out successfully', 'info');
 }
 

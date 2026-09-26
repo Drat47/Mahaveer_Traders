@@ -234,18 +234,19 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    // 2. Auth: Login
+    // 2. Auth: Login (Supports Username or Mobile Number)
     if (pathname === '/api/auth/login' && req.method === 'POST') {
       const body = await parseJsonBody(req);
       const { username, password } = body;
 
       if (!username || !password) {
-        return sendError('Username and password are required', 400);
+        return sendError('Username/Mobile number and password are required', 400);
       }
 
-      const user = db.prepare("SELECT * FROM users WHERE username = ? AND password = ? AND is_active = 1").get(username.trim(), password);
+      const cleanInput = username.trim();
+      const user = db.prepare("SELECT * FROM users WHERE (username = ? OR phone = ?) AND password = ? AND is_active = 1").get(cleanInput, cleanInput, password);
       if (!user) {
-        return sendError('Invalid username or password', 401);
+        return sendError('Invalid credentials. Check username/mobile number and password.', 401);
       }
 
       let mechanic = null;
@@ -271,6 +272,181 @@ const server = http.createServer(async (req, res) => {
         success: true,
         token,
         user: sessionUser
+      });
+    }
+
+    // 2b. Auth: New User Sign Up (Self-Registration for Mechanics / Workers)
+    if (pathname === '/api/auth/signup' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      const { name, phone, trade_type, address, password } = body;
+
+      if (!name || !phone || !password) {
+        return sendError('Name, mobile number, and password are required', 400);
+      }
+
+      const cleanPhone = phone.replace(/[^0-9]/g, '');
+      if (cleanPhone.length !== 10) {
+        return sendError('Please enter a valid 10-digit mobile number', 400);
+      }
+
+      if (password.length < 4) {
+        return sendError('Password must be at least 4 characters long', 400);
+      }
+
+      // Check if phone or username already registered
+      const existingUser = db.prepare("SELECT id FROM users WHERE phone = ? OR username = ?").get(cleanPhone, cleanPhone);
+      const existingMech = db.prepare("SELECT id FROM mechanics WHERE phone = ?").get(cleanPhone);
+      if (existingUser || existingMech) {
+        return sendError('This mobile number is already registered. Please log in or use Forgot Password.', 400);
+      }
+
+      // Generate unique sequential UID (e.g. MEC1007)
+      const maxMech = db.prepare("SELECT MAX(id) as maxId FROM mechanics").get();
+      const nextNum = (maxMech && maxMech.maxId ? maxMech.maxId : 0) + 1001;
+      const uid = `MEC${nextNum}`;
+      const trade = trade_type || 'Others';
+      const addr = address ? address.trim() : 'Registered Field Worker';
+
+      // Insert into mechanics table
+      const insertMech = db.prepare(`
+        INSERT INTO mechanics (uid, name, phone, address, trade_type, password, available_points, lifetime_points, recovery_points, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 1)
+      `);
+      const mechInfo = insertMech.run(uid, name.trim(), cleanPhone, addr, trade, password);
+      const mechId = Number(mechInfo.lastInsertRowid);
+
+      // Insert into users login table
+      const insertUser = db.prepare(`
+        INSERT INTO users (username, password, role, name, phone, mechanic_id, is_active)
+        VALUES (?, ?, 'mechanic', ?, ?, ?, 1)
+      `);
+      const userInfo = insertUser.run(uid, password, name.trim(), cleanPhone, mechId);
+
+      const mechanic = db.prepare("SELECT * FROM mechanics WHERE id = ?").get(mechId);
+      const token = crypto.randomBytes(32).toString('hex');
+      const sessionUser = {
+        id: Number(userInfo.lastInsertRowid),
+        username: uid,
+        role: 'mechanic',
+        name: name.trim(),
+        phone: cleanPhone,
+        mechanicId: mechId,
+        mechanic: mechanic
+      };
+
+      sessions.set(token, sessionUser);
+      logAudit(name.trim(), 'mechanic', 'User Self-Registration', `New worker registered (${trade}, ${cleanPhone}, ${uid})`, req);
+      addNotification(0, `👷 New ${trade} worker registered: ${name.trim()} (${cleanPhone}, ${uid})`);
+
+      return sendJson({
+        success: true,
+        message: 'Account created successfully! Welcome to Mahaveer Traders Loyalty System.',
+        token,
+        user: sessionUser
+      });
+    }
+
+    // 2c. Auth: Forgot Password - Send OTP via Mobile Number
+    if (pathname === '/api/auth/forgot-password/send-otp' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      const { phone } = body;
+
+      if (!phone) {
+        return sendError('Mobile number is required', 400);
+      }
+
+      const cleanPhone = phone.replace(/[^0-9]/g, '');
+      if (cleanPhone.length !== 10) {
+        return sendError('Please enter a valid 10-digit mobile number', 400);
+      }
+
+      // Find user or mechanic with this phone
+      const user = db.prepare("SELECT * FROM users WHERE phone = ? OR username = ?").get(cleanPhone, cleanPhone);
+      const mech = db.prepare("SELECT * FROM mechanics WHERE phone = ?").get(cleanPhone);
+
+      if (!user && !mech) {
+        return sendError('No account found registered with this mobile number. Please check the number or sign up.', 404);
+      }
+
+      const userName = (user ? user.name : null) || (mech ? mech.name : 'User');
+
+      // Generate 6-digit numeric OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes expiry
+
+      // Invalidate previous unused OTPs for this phone
+      db.prepare("UPDATE password_resets SET used = 1 WHERE phone = ? AND used = 0").run(cleanPhone);
+
+      // Save new OTP in database
+      db.prepare(`
+        INSERT INTO password_resets (phone, otp, expires_at, used)
+        VALUES (?, ?, ?, 0)
+      `).run(cleanPhone, otp, expiresAt);
+
+      const otpMsg = `Your Mahaveer Traders password reset OTP is ${otp}. Valid for 10 minutes.`;
+      const whatsappText = `🔐 *MAHAVEER TRADERS - PASSWORD RESET OTP*\n\nHello *${userName}*,\nYour password reset OTP is: *${otp}*\n\nValid for 10 minutes. Do not share this OTP.`;
+      const whatsappUrl = `https://wa.me/91${cleanPhone}?text=${encodeURIComponent(whatsappText)}`;
+      const smsUrl = `sms:+91${cleanPhone}?body=${encodeURIComponent(otpMsg)}`;
+
+      logAudit(userName, user ? user.role : 'mechanic', 'Password Reset OTP Requested', `OTP generated for phone ${cleanPhone}`, req);
+
+      return sendJson({
+        success: true,
+        message: `OTP sent successfully to +91 ${cleanPhone}`,
+        phone: cleanPhone,
+        otp, // Included for instant demonstration & rapid testing without third-party SMS delays
+        expiresAt,
+        whatsappUrl,
+        smsUrl,
+        userName
+      });
+    }
+
+    // 2d. Auth: Forgot Password - Verify OTP & Set New Password
+    if (pathname === '/api/auth/forgot-password/verify-otp' && req.method === 'POST') {
+      const body = await parseJsonBody(req);
+      const { phone, otp, newPassword } = body;
+
+      if (!phone || !otp || !newPassword) {
+        return sendError('Mobile number, OTP, and new password are required', 400);
+      }
+
+      const cleanPhone = phone.replace(/[^0-9]/g, '');
+      if (newPassword.length < 4) {
+        return sendError('New password must be at least 4 characters long', 400);
+      }
+
+      // Verify OTP in database
+      const record = db.prepare(`
+        SELECT * FROM password_resets 
+        WHERE phone = ? AND otp = ? AND used = 0
+        ORDER BY id DESC LIMIT 1
+      `).get(cleanPhone, otp.trim());
+
+      if (!record) {
+        return sendError('Invalid or expired OTP. Please check the OTP or request a new one.', 400);
+      }
+
+      // Check expiry
+      if (new Date(record.expires_at) < new Date()) {
+        db.prepare("UPDATE password_resets SET used = 1 WHERE id = ?").run(record.id);
+        return sendError('This OTP has expired. Please request a new OTP.', 400);
+      }
+
+      // Mark OTP as used
+      db.prepare("UPDATE password_resets SET used = 1 WHERE id = ?").run(record.id);
+
+      // Update password in users table
+      db.prepare("UPDATE users SET password = ? WHERE phone = ? OR username = ?").run(newPassword, cleanPhone, cleanPhone);
+
+      // Update password in mechanics table
+      db.prepare("UPDATE mechanics SET password = ? WHERE phone = ?").run(newPassword, cleanPhone);
+
+      logAudit('User', 'auth', 'Password Reset Completed', `Password successfully reset for phone ${cleanPhone}`, req);
+
+      return sendJson({
+        success: true,
+        message: 'Password reset successfully! You can now log in with your new password.'
       });
     }
 
